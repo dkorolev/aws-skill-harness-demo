@@ -1,9 +1,6 @@
 # E2E Run Log — example (sanitized)
 
-A real, complete run of `E2E-HARNESS.md` rev 3 — every phase passed on the
-first attempt with no improvisation. Account ID, domain, IPs, and resource
-IDs are masked with documentation placeholders (`111122223333`,
-`example.com`, RFC 5737 addresses); the outputs are otherwise verbatim.
+A real, complete run of `E2E-HARNESS.md` rev 3 — every phase passed on the first attempt with no improvisation. Account ID, domain, IPs, and resource IDs are masked with documentation placeholders (`111122223333`, `example.com`, RFC 5737 addresses); the outputs are otherwise verbatim.
 
 Account `111122223333`, region `us-west-1`.
 
@@ -20,8 +17,7 @@ MYIP=198.51.100.75
 WORKDIR=/tmp/tmp.XXXXXXXXXX
 ```
 
-Leftover check: only terminated instances from prior runs (acceptable);
-no SGs; key clean; scratch clean.
+Leftover check: only terminated instances from prior runs (acceptable); no SGs; key clean; scratch clean.
 
 ## Phase 1 — the application
 
@@ -122,8 +118,7 @@ dig @8.8.8.8 → 198.51.100.11, 198.51.100.12
 curl --resolve simplealb.example.com:80:198.51.100.11 → count=20 path=/via-alb host=simplealb.example.com
 ```
 
-(Note the two probes returning different subsets of the ALB's IP set —
-expected per the DNS ground rules; not compared.)
+(Note the two probes returning different subsets of the ALB's IP set — expected per the DNS ground rules; not compared.)
 
 ## Phase 11 — stop, wait, start: watch the IP change
 
@@ -154,9 +149,7 @@ curl --resolve simplealb.example.com:80:198.51.100.11 → count=8 path=/after-re
 
 **CHECK: PASSED**
 
-DNS records deleted (simpletest.example.com using frozen IP1=203.0.113.10,
-simplealb.example.com alias). ALB, target group, instance, security groups,
-and key pair all deleted. WORKDIR removed.
+DNS records deleted (simpletest.example.com using frozen IP1=203.0.113.10, simplealb.example.com alias). ALB, target group, instance, security groups, and key pair all deleted. WORKDIR removed.
 
 ## Phase 14 — confirm it is ALL torn down
 

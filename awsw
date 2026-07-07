@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """awsw — a read-only wrapper around the AWS CLI.
 
+How this is tested: there are no unit tests by design — every subcommand is a
+thin read-only mapping onto `aws` CLI output. The tool is exercised end to end
+by the executable Markdown harness in this repository: E2E-HARNESS.md uses it
+for the Phase 14 teardown-verification sweep.
+
 Subcommands:
   whoami     Who am I: identity, account, aliases, default region
   regions    List all enabled regions
