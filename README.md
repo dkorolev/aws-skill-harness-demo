@@ -25,6 +25,12 @@ The harness demonstrates both, side by side, on the same instance.
 - **[E2E-RUN-LOG-EXAMPLE.md](E2E-RUN-LOG-EXAMPLE.md)** — a real, complete run
   (all phases passed, no improvisation), sanitized: account ID, domain, IPs,
   and resource IDs replaced with documentation placeholders.
+- **[awsw](awsw)** — a single-file, stdlib-only Python wrapper around the
+  aws CLI: per-service inventory across all regions in parallel (EC2, EBS,
+  EIPs, security groups, ELB + target health, ACM, RDS, ECS, VPC endpoints,
+  SES, S3, CloudFront, Route53), month-to-date billing via Cost Explorer,
+  and `discover` to run everything. Read-only by design. Used by the
+  harness for its verification sweeps.
 
 ## Highlights
 

@@ -536,9 +536,15 @@ aws route53 list-resource-record-sets --hosted-zone-id Z123456789EXAMPLE \
   --query 'ResourceRecordSets[?contains(Name,`simple`)]'              # []
 ```
 
-Optionally finish with your inventory tooling of choice and confirm the
-account is back to its pre-exercise baseline: no `simpletest-*` resource of
-any kind, no load balancers, no stray EIPs, no `simple*` DNS records.
+Then the belt-and-braces sweep with the bundled [`awsw`](awsw) tool,
+confirming the account is back to its pre-exercise baseline:
+
+```sh
+./awsw --region us-west-1 ec2   # no simpletest instance in any non-terminated state
+./awsw --region us-west-1 elb   # (none)
+./awsw eips                     # no addresses left behind (none were created)
+./awsw r53                      # no simple* records in the zone
+```
 
 **CHECK**: all empty / back to the pre-exercise baseline. The exercise is
 complete when this phase passes, not before.
