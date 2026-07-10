@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""awsw — a read-only wrapper around the AWS CLI.
+"""awsw — a mostly read-only wrapper around the AWS CLI.
 
 How this is tested: there are no unit tests by design — every subcommand is a
-thin read-only mapping onto `aws` CLI output. The tool is exercised end to end
+thin mapping onto `aws` CLI output, read-only except for `r53 --create`. The tool is exercised end to end
 by the executable Markdown harness in this repository: E2E-HARNESS.md uses it
 for the Phase 14 teardown-verification sweep.
 
@@ -23,7 +23,7 @@ Subcommands:
   ses        SES verified identities (all regions)
   s3         S3 buckets (global, with per-bucket region)
   cloudfront CloudFront distributions (global)
-  r53        Route53 hosted zones + all records
+  r53        Route53 hosted zones + all records; --create DOMAIN for a new public zone
   billing    Month-to-date cost by service (and by region)
   discover   Everything above, in one go
 
@@ -36,6 +36,7 @@ import json
 import shutil
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
@@ -580,7 +581,38 @@ def cmd_cloudfront(args):
 
 # ---------------------------------------------------------------- route53
 
+def cmd_r53_create(args):
+    """Create a public hosted zone; print zone id + NS set for registrar delegation."""
+    name = args.create.rstrip(".")
+    caller = f"awsw-{name}-{int(time.time() * 1000)}"
+    cli = ["route53", "create-hosted-zone",
+           "--name", name,
+           "--caller-reference", caller]
+    comment = args.comment or f"created by awsw {time.strftime('%Y-%m-%d')}"
+    cli += ["--hosted-zone-config",
+            f"Comment={comment},PrivateZone=false"]
+    result = aws(*cli)
+    if not result:
+        sys.exit(1)
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return
+    zone = result["HostedZone"]
+    zid = zone["Id"].split("/")[-1]
+    ns = result.get("DelegationSet", {}).get("NameServers", [])
+    section(f"created hosted zone {zone['Name']}")
+    print(f"  Id          : {zid}")
+    print(f"  Name        : {zone['Name']}")
+    print(f"  Comment     : {zone.get('Config', {}).get('Comment', '-')}")
+    print(f"  NameServers :")
+    for n in ns:
+        print(f"    {n}")
+    print("\n  Point the domain's registrar NS records at the NameServers above.")
+
+
 def cmd_r53(args):
+    if args.create:
+        return cmd_r53_create(args)
     zones = aws("route53", "list-hosted-zones") or {}
     zones = zones.get("HostedZones", [])
     result = []
@@ -698,6 +730,13 @@ def main():
                      ("discover", cmd_discover)]:
         sp = sub.add_parser(name)
         sp.set_defaults(fn=fn)
+        if name == "r53":
+            sp.add_argument("--create", metavar="DOMAIN",
+                            help="create a public hosted zone for DOMAIN")
+            sp.add_argument("--comment", default="",
+                            help="optional Comment for --create")
+        else:
+            sp.set_defaults(create=None, comment="")
     args = p.parse_args()
     args.fn(args)
 

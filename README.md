@@ -13,7 +13,7 @@ The harness demonstrates both, side by side, on the same instance.
 
 - **[E2E-HARNESS.md](E2E-HARNESS.md)** — the runbook. 15 phases (0–14) plus an emergency-teardown appendix. Written to be executed verbatim by a human or an AI agent: bounded waits everywhere, resolver-independent DNS checks, explicit pass/fail criteria including acceptable error codes.
 - **[E2E-RUN-LOG-EXAMPLE.md](E2E-RUN-LOG-EXAMPLE.md)** — a real, complete run (all phases passed, no improvisation), sanitized: account ID, domain, IPs, and resource IDs replaced with documentation placeholders.
-- **[awsw](awsw)** — a single-file, stdlib-only Python wrapper around the aws CLI: per-service inventory across all regions in parallel (EC2, EBS, EIPs, security groups, ELB + target health, ACM, RDS, ECS, VPC endpoints, SES, S3, CloudFront, Route53), month-to-date billing via Cost Explorer, and `discover` to run everything. Read-only by design. Used by the harness for its verification sweeps.
+- **[awsw](awsw)** — a single-file, stdlib-only Python wrapper around the aws CLI: per-service inventory across all regions in parallel (EC2, EBS, EIPs, security groups, ELB + target health, ACM, RDS, ECS, VPC endpoints, SES, S3, CloudFront, Route53), month-to-date billing via Cost Explorer, and `discover` to run everything. Read-only by design, with one explicitly named write: `r53 --create DOMAIN` makes a new public hosted zone and prints its delegation set. Used by the harness for its verification sweeps.
 
 ## Highlights
 
