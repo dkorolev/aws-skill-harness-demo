@@ -206,5 +206,9 @@ mod tests {
         assert_eq!(credentials.access_key_id(), "TEEKEY");
         assert_eq!(credentials.secret_access_key(), "TEESECRET");
         assert_eq!(credentials.session_token(), Some("TOKEN"));
+        let debug = format!("{credentials:?}");
+        assert!(!debug.contains("TEEKEY"));
+        assert!(!debug.contains("TEESECRET"));
+        assert!(!debug.contains("TOKEN"));
     }
 }

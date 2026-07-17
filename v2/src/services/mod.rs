@@ -1,3 +1,13 @@
+pub mod acm;
+pub mod cloudfront;
+pub(crate) mod common;
+pub mod cost_explorer;
 pub mod ec2;
+pub mod ecs;
+pub mod elb;
 pub mod iam;
+pub mod rds;
+pub mod route53;
+pub mod s3;
+pub mod ses;
 pub mod sts;

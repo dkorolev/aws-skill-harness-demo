@@ -1,0 +1,6 @@
+#!/bin/sh
+# Repository launcher for the Rust implementation. `cargo run` checks whether
+# the binary is current and only rebuilds when sources or dependencies changed.
+set -eu
+launcher_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec cargo run --quiet --manifest-path "$launcher_dir/v2/Cargo.toml" -- "$@"

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""awsw — a mostly read-only wrapper around the AWS CLI.
+"""awsw-v1-obsolete — the obsolete AWS CLI-backed inventory implementation.
 
-How this is tested: there are no unit tests by design — every subcommand is a
-thin mapping onto `aws` CLI output, read-only except for `r53 --create`. The tool is exercised end to end
-by the executable Markdown harness in this repository: E2E-HARNESS.md uses it
-for the Phase 14 teardown-verification sweep.
+Retained as a behavioral reference for the Rust implementation in v2/, which
+`./awsw-v2` launches. There are no unit tests by design — every subcommand is a
+thin mapping onto `aws` CLI output, read-only except for `r53 --create` — and
+the executable Markdown harness E2E-HARNESS.md now exercises `awsw-v2`, not
+this file, for its Phase 14 teardown-verification sweep.
 
 Subcommands:
   whoami     Who am I: identity, account, aliases, default region
@@ -106,6 +107,12 @@ def get_regions(only=None):
     return sorted(r["RegionName"] for r in data["Regions"])
 
 
+def configured_region():
+    """Return the AWS CLI's configured default region (v2 overrides this)."""
+    return subprocess.run(["aws", "configure", "get", "region"],
+                          capture_output=True, text=True).stdout.strip()
+
+
 # ---------------------------------------------------------------- whoami
 
 def cmd_whoami(args):
@@ -122,8 +129,7 @@ def cmd_whoami(args):
           + (f" ({', '.join(aliases['AccountAliases'])})" if aliases.get("AccountAliases") else ""))
     print(f"  ARN     : {ident['Arn']}")
     print(f"  UserId  : {ident['UserId']}")
-    cfg = subprocess.run(["aws", "configure", "get", "region"],
-                         capture_output=True, text=True).stdout.strip()
+    cfg = configured_region()
     print(f"  Region  : {cfg or '(not set)'} (default)")
 
 

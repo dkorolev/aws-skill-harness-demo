@@ -1,6 +1,6 @@
 [package]
 name = "awsw-v2"
-version = "0.1.0"
+version = "2.0.0"
 edition = "2024"
 description = "Dependency-light AWS inventory client with manual payloads and SigV4"
 license = "MIT"
@@ -12,6 +12,7 @@ hex = "0.4"
 hmac = "0.12"
 percent-encoding = "2"
 quick-xml = { version = "0.38", features = ["serialize"] }
+rayon = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

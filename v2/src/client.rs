@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, thread, time::Duration};
 
 use chrono::Utc;
 use reqwest::{
@@ -6,6 +6,7 @@ use reqwest::{
     blocking::Client,
     header::{HeaderMap, HeaderName, HeaderValue},
 };
+use sha2::Digest;
 
 use crate::{
     Credentials,
@@ -122,24 +123,40 @@ impl AwsClient {
                     .map_err(|error| Error::InvalidRequest(error.to_string()))?,
             );
         }
-        let response = self
-            .http
-            .request(request.method, url)
-            .headers(headers)
-            .body(request.body)
-            .send()?;
-        let status = response.status();
-        let request_id = response
-            .headers()
-            .get("x-amzn-requestid")
-            .or_else(|| response.headers().get("x-amz-request-id"))
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
-        let body = response.bytes()?.to_vec();
-        if !status.is_success() {
+        const ATTEMPTS: usize = 3;
+        for attempt in 0..ATTEMPTS {
+            let result = self
+                .http
+                .request(request.method.clone(), &url)
+                .headers(headers.clone())
+                .body(request.body.clone())
+                .send();
+            let response = match result {
+                Ok(response) => response,
+                Err(_error) if attempt + 1 < ATTEMPTS => {
+                    thread::sleep(Duration::from_millis(150 * (1 << attempt)));
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
+            let status = response.status();
+            let request_id = response
+                .headers()
+                .get("x-amzn-requestid")
+                .or_else(|| response.headers().get("x-amz-request-id"))
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            let body = response.bytes()?.to_vec();
+            if status.is_success() {
+                return Ok(body);
+            }
+            if matches!(status.as_u16(), 429 | 500 | 502 | 503 | 504) && attempt + 1 < ATTEMPTS {
+                thread::sleep(Duration::from_millis(150 * (1 << attempt)));
+                continue;
+            }
             return Err(parse_error(status.as_u16(), request_id, &body));
         }
-        Ok(body)
+        Err(Error::InvalidRequest("request retry loop exhausted".into()))
     }
 }
 
@@ -160,8 +177,85 @@ fn parse_error(status: u16, request_id: Option<String>, body: &[u8]) -> Error {
             .unwrap_or("AWS request failed");
         return Error::aws(status, code, message, request_id);
     }
+    if let Ok(value) = quick_xml::de::from_reader::<_, XmlQueryError>(body) {
+        let request_id = request_id.or(value.request_id);
+        return Error::aws(
+            status,
+            value.errors.error.code,
+            value.errors.error.message,
+            request_id,
+        );
+    }
+    if let Ok(value) = quick_xml::de::from_reader::<_, XmlEnvelopeError>(body) {
+        let request_id = request_id.or(value.request_id);
+        return Error::aws(status, value.error.code, value.error.message, request_id);
+    }
+    if let Ok(value) = quick_xml::de::from_reader::<_, XmlDirectError>(body) {
+        let request_id = request_id.or(value.request_id);
+        return Error::aws(status, value.code, value.message, request_id);
+    }
     let text = String::from_utf8_lossy(body);
     Error::aws(status, "HTTPError", text, request_id)
 }
 
-use sha2::Digest;
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct XmlQueryError {
+    errors: XmlErrors,
+    #[serde(rename = "RequestID", alias = "RequestId")]
+    request_id: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct XmlErrors {
+    error: XmlErrorValue,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct XmlEnvelopeError {
+    error: XmlErrorValue,
+    request_id: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct XmlDirectError {
+    code: String,
+    message: String,
+    request_id: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct XmlErrorValue {
+    code: String,
+    message: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_query_protocol_error_without_exposing_request() {
+        let body = br#"<Response><Errors><Error><Code>AccessDenied</Code><Message>no</Message></Error></Errors><RequestID>req-1</RequestID></Response>"#;
+        let error = parse_error(403, None, body).to_string();
+        assert_eq!(error, "AWS 403 AccessDenied: no (request req-1)");
+    }
+
+    #[test]
+    fn extracts_rest_xml_error() {
+        let body = br#"<Error><Code>NoSuchBucket</Code><Message>gone</Message><RequestId>req-2</RequestId></Error>"#;
+        let error = parse_error(404, None, body).to_string();
+        assert_eq!(error, "AWS 404 NoSuchBucket: gone (request req-2)");
+    }
+
+    #[test]
+    fn extracts_iam_error_envelope() {
+        let body = br#"<ErrorResponse><Error><Type>Sender</Type><Code>NoSuchEntity</Code><Message>missing</Message></Error><RequestId>req-3</RequestId></ErrorResponse>"#;
+        let error = parse_error(404, None, body).to_string();
+        assert_eq!(error, "AWS 404 NoSuchEntity: missing (request req-3)");
+    }
+}
