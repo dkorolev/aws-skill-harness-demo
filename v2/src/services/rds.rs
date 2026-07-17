@@ -2,8 +2,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{AwsClient, Result, protocols::query};
 
-use super::common::Members;
-
 const VERSION: &str = "2014-10-31";
 
 fn call<T: for<'de> Deserialize<'de>>(
@@ -34,8 +32,14 @@ struct InstancesResponse {
 #[serde(rename_all = "PascalCase")]
 struct InstancesResult {
     #[serde(rename = "DBInstances", default)]
-    db_instances: Members<InstanceXml>,
+    db_instances: DbInstances,
     marker: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct DbInstances {
+    #[serde(rename = "DBInstance", default)]
+    values: Vec<InstanceXml>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,8 +74,14 @@ struct ClustersResponse {
 #[serde(rename_all = "PascalCase")]
 struct ClustersResult {
     #[serde(rename = "DBClusters", default)]
-    db_clusters: Members<ClusterXml>,
+    db_clusters: DbClusters,
     marker: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct DbClusters {
+    #[serde(rename = "DBCluster", default)]
+    values: Vec<ClusterXml>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,7 +94,13 @@ struct ClusterXml {
     status: Option<String>,
     endpoint: Option<String>,
     #[serde(default)]
-    availability_zones: Members<String>,
+    availability_zones: AvailabilityZones,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AvailabilityZones {
+    #[serde(rename = "AvailabilityZone", default)]
+    values: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -113,11 +129,11 @@ pub fn describe_databases(client: &AwsClient, region: &str) -> Result<Vec<Databa
             response
                 .describe_db_clusters_result
                 .db_clusters
-                .members
+                .values
                 .into_iter()
                 .map(|db| Database {
                     region: region.into(),
-                    availability_zones: db.availability_zones.members,
+                    availability_zones: db.availability_zones.values,
                     identifier: db.db_cluster_identifier,
                     kind: "cluster".into(),
                     engine: combine(db.engine, db.engine_version),
@@ -142,7 +158,7 @@ pub fn describe_databases(client: &AwsClient, region: &str) -> Result<Vec<Databa
             response
                 .describe_db_instances_result
                 .db_instances
-                .members
+                .values
                 .into_iter()
                 .map(|db| Database {
                     region: region.into(),
@@ -168,5 +184,33 @@ fn combine(left: Option<String>, right: Option<String>) -> Option<String> {
         (Some(left), Some(right)) => Some(format!("{left} {right}")),
         (Some(value), None) | (None, Some(value)) => Some(value),
         (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_rds_named_collection_elements() {
+        let instances: InstancesResponse = quick_xml::de::from_str(
+            r#"<DescribeDBInstancesResponse><DescribeDBInstancesResult><DBInstances><DBInstance><DBInstanceIdentifier>db-one</DBInstanceIdentifier><DBInstanceClass>db.t3.micro</DBInstanceClass><Engine>postgres</Engine><EngineVersion>16.3</EngineVersion><AvailabilityZone>us-east-1a</AvailabilityZone><Endpoint><Address>db.example</Address></Endpoint></DBInstance></DBInstances></DescribeDBInstancesResult></DescribeDBInstancesResponse>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            instances.describe_db_instances_result.db_instances.values[0].db_instance_identifier,
+            "db-one"
+        );
+
+        let clusters: ClustersResponse = quick_xml::de::from_str(
+            r#"<DescribeDBClustersResponse><DescribeDBClustersResult><DBClusters><DBCluster><DBClusterIdentifier>cluster-one</DBClusterIdentifier><AvailabilityZones><AvailabilityZone>us-east-1a</AvailabilityZone><AvailabilityZone>us-east-1b</AvailabilityZone></AvailabilityZones></DBCluster></DBClusters></DescribeDBClustersResult></DescribeDBClustersResponse>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            clusters.describe_db_clusters_result.db_clusters.values[0]
+                .availability_zones
+                .values,
+            ["us-east-1a", "us-east-1b"]
+        );
     }
 }

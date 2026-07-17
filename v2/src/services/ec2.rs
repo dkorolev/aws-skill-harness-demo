@@ -61,6 +61,7 @@ struct Reservation {
 struct InstanceXml {
     instance_id: String,
     instance_type: Option<String>,
+    #[serde(rename = "ipAddress")]
     public_ip_address: Option<String>,
     private_ip_address: Option<String>,
     placement: Option<Placement>,
@@ -594,5 +595,14 @@ mod tests {
         let xml = br#"<DescribeRegionsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>x</requestId><regionInfo><item><regionName>eu-west-2</regionName><regionEndpoint>ec2.eu-west-2.amazonaws.com</regionEndpoint><optInStatus>opt-in-not-required</optInStatus></item></regionInfo></DescribeRegionsResponse>"#;
         let response: RegionsResponse = quick_xml::de::from_reader(xml.as_slice()).unwrap();
         assert_eq!(response.region_info.items[0].region_name, "eu-west-2");
+    }
+
+    #[test]
+    fn decodes_ec2_public_ip_wire_name() {
+        let xml = br#"<DescribeInstancesResponse><reservationSet><item><instancesSet><item><instanceId>i-1</instanceId><ipAddress>192.0.2.10</ipAddress><privateIpAddress>10.0.0.1</privateIpAddress></item></instancesSet></item></reservationSet></DescribeInstancesResponse>"#;
+        let response: ReservationsPage = quick_xml::de::from_reader(xml.as_slice()).unwrap();
+        let instance = &response.reservation_set.items[0].instances_set.items[0];
+        assert_eq!(instance.public_ip_address.as_deref(), Some("192.0.2.10"));
+        assert_eq!(instance.private_ip_address.as_deref(), Some("10.0.0.1"));
     }
 }

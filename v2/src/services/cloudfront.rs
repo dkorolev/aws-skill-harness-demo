@@ -12,7 +12,7 @@ struct DistributionList {
 
 #[derive(Debug, Default, Deserialize)]
 struct DistributionItems {
-    #[serde(rename = "Distribution", default)]
+    #[serde(rename = "DistributionSummary", default)]
     values: Vec<DistributionXml>,
 }
 
@@ -110,4 +110,24 @@ pub fn list_distributions(client: &AwsClient) -> Result<Vec<Distribution>> {
         }
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_distribution_summary_elements() {
+        let response: DistributionList = quick_xml::de::from_str(
+            r#"<DistributionList><Items><DistributionSummary><Id>E123</Id><DomainName>d.example.cloudfront.net</DomainName><Aliases><Items><CNAME>www.example.com</CNAME></Items></Aliases><Origins><Items><Origin><DomainName>origin.example.com</DomainName></Origin></Items></Origins><Status>Deployed</Status><Enabled>true</Enabled></DistributionSummary></Items></DistributionList>"#,
+        )
+        .unwrap();
+        let distribution = &response.items.values[0];
+        assert_eq!(distribution.id, "E123");
+        assert_eq!(distribution.aliases.items.values, ["www.example.com"]);
+        assert_eq!(
+            distribution.origins.items.values[0].domain_name,
+            "origin.example.com"
+        );
+    }
 }

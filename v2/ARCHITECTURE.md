@@ -172,7 +172,9 @@ The offline suite covers:
 - Query payload construction;
 - query and path percent encoding;
 - deterministic SigV4 structure and signed-header selection;
-- compact EC2 XML without formatting assumptions;
+- compact EC2 XML without formatting assumptions, including EC2's `ipAddress` wire name;
+- RDS and CloudFront service-specific collection element names;
+- ELB `DNSName` and Route 53 `TTL` acronym capitalization;
 - Route 53 typed XML serialization and escaping;
 - CLI help exposing the complete command surface.
 

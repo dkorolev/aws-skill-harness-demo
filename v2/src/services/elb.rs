@@ -42,6 +42,7 @@ struct LoadBalancersResult {
 struct LoadBalancerXml {
     load_balancer_arn: String,
     load_balancer_name: String,
+    #[serde(rename = "DNSName")]
     dns_name: Option<String>,
     scheme: Option<String>,
     r#type: Option<String>,
@@ -231,4 +232,26 @@ pub fn describe_target_groups(client: &AwsClient, region: &str) -> Result<Vec<Ta
         });
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_aws_dns_acronym() {
+        let response: LoadBalancersResponse = quick_xml::de::from_str(
+            r#"<DescribeLoadBalancersResponse><DescribeLoadBalancersResult><LoadBalancers><member><LoadBalancerArn>arn:lb</LoadBalancerArn><LoadBalancerName>demo</LoadBalancerName><DNSName>demo.elb.amazonaws.com</DNSName></member></LoadBalancers></DescribeLoadBalancersResult></DescribeLoadBalancersResponse>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            response
+                .describe_load_balancers_result
+                .load_balancers
+                .members[0]
+                .dns_name
+                .as_deref(),
+            Some("demo.elb.amazonaws.com")
+        );
+    }
 }

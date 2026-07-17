@@ -57,6 +57,7 @@ struct RecordSets {
 struct RecordXml {
     name: String,
     r#type: String,
+    #[serde(rename = "TTL")]
     ttl: Option<u64>,
     alias_target: Option<AliasTarget>,
     #[serde(default)]
@@ -292,5 +293,14 @@ mod tests {
         assert!(xml.contains("<Name>example.com</Name>"));
         assert!(xml.contains("a &amp; b"));
         assert!(xml.contains("xmlns=\"https://route53.amazonaws.com/doc/2013-04-01/\""));
+    }
+
+    #[test]
+    fn decodes_ttl_acronym() {
+        let response: RecordsResponse = quick_xml::de::from_str(
+            r#"<ListResourceRecordSetsResponse><ResourceRecordSets><ResourceRecordSet><Name>example.com.</Name><Type>A</Type><TTL>300</TTL><ResourceRecords><ResourceRecord><Value>192.0.2.1</Value></ResourceRecord></ResourceRecords></ResourceRecordSet></ResourceRecordSets></ListResourceRecordSetsResponse>"#,
+        )
+        .unwrap();
+        assert_eq!(response.resource_record_sets.values[0].ttl, Some(300));
     }
 }
