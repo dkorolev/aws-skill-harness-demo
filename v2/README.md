@@ -44,7 +44,7 @@ It deliberately delegates non-AWS primitives to established general-purpose crat
 
 ## Commands
 
-All inventory commands are read-only. The sole mutating operation is explicitly spelled `r53 --create DOMAIN`.
+All inventory commands are read-only. Route 53 writes are exposed through explicitly named `r53` options.
 
 | Command | AWS APIs | Scope | Result |
 |---|---|---|---|
@@ -69,6 +69,21 @@ All inventory commands are read-only. The sole mutating operation is explicitly 
 | `billing` | Cost Explorer | global/us-east-1 | month-to-date service and region cost |
 | `discover` | all APIs above | account-wide | one complete inventory |
 | `r53 --create DOMAIN` | Route 53 | global, **write** | new public zone and delegation set |
+| `r53 --upsert-txt NAME` | Route 53 | global, **write** | create or replace a TXT record set |
+| `r53 --delete-txt NAME` | Route 53 | global, **write** | delete an exact TXT record set |
+
+For a Let's Encrypt DNS-01 challenge, pass the TXT value without DNS quotes; the client adds the quotes Route 53 requires and safely serializes the request:
+
+```sh
+./awsw-v2 r53 --upsert-txt _acme-challenge.example.com \
+  --zone-id Z1234567890 --value challenge-token --ttl 60
+
+# After certificate issuance, use the same TTL and complete value set:
+./awsw-v2 r53 --delete-txt _acme-challenge.example.com \
+  --zone-id Z1234567890 --value challenge-token --ttl 60
+```
+
+Repeat `--value` for a multi-value TXT record set. Route 53 requires a DELETE to specify the record's exact current TTL and complete value set. Both commands return the Route 53 change ID and initial status; certificate tooling must still wait for DNS propagation before asking the ACME server to validate the proof.
 
 Use `--region REGION` before or after a subcommand to restrict regional scans:
 
@@ -125,7 +140,7 @@ Regional scans execute concurrently through a bounded Rayon worker pool. Errors 
 - XML request values are serialized and escaped, not interpolated into XML.
 - HTTPS-only transport and disabled redirects narrow exfiltration paths.
 - Typed operations prevent accidentally sending one service's shape to another service endpoint.
-- The only write operation is a separately named Route 53 sub-option.
+- Write operations are separately named Route 53 sub-options.
 
 ### Not protected yet
 

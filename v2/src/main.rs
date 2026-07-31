@@ -4,7 +4,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use awsw_v2::{AwsClient, CredentialProvider, EnvironmentProvider, Result, services};
+use awsw_v2::{AwsClient, CredentialProvider, EnvironmentProvider, Error, Result, services};
 use clap::{Parser, Subcommand};
 use rayon::prelude::*;
 use serde::Serialize;
@@ -59,10 +59,37 @@ enum Command {
     S3,
     /// Inventory CloudFront distributions.
     Cloudfront,
-    /// Inventory Route 53 zones/records, or create one public zone.
+    /// Inventory Route 53, create a public zone, or change a TXT record.
     R53 {
-        #[arg(long, value_name = "DOMAIN")]
+        #[arg(
+            long,
+            value_name = "DOMAIN",
+            conflicts_with_all = ["upsert_txt", "delete_txt"]
+        )]
         create: Option<String>,
+        /// Create or replace a TXT record set.
+        #[arg(
+            long,
+            value_name = "NAME",
+            conflicts_with_all = ["create", "delete_txt"]
+        )]
+        upsert_txt: Option<String>,
+        /// Delete an exact TXT record set (the TTL and all values must match).
+        #[arg(
+            long,
+            value_name = "NAME",
+            conflicts_with_all = ["create", "upsert_txt"]
+        )]
+        delete_txt: Option<String>,
+        /// Route 53 hosted-zone ID containing the TXT record.
+        #[arg(long, value_name = "ID")]
+        zone_id: Option<String>,
+        /// Unquoted TXT value; repeat for a multi-value record set.
+        #[arg(long, value_name = "TEXT")]
+        value: Vec<String>,
+        /// TXT record TTL in seconds.
+        #[arg(long, default_value_t = 60)]
+        ttl: u64,
         #[arg(long, default_value = "")]
         comment: String,
     },
@@ -122,6 +149,7 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    validate_cli(&cli)?;
     let default_region = cli
         .region
         .clone()
@@ -219,7 +247,15 @@ fn run() -> Result<()> {
         Command::Cloudfront => {
             render_cloudfront(services::cloudfront::list_distributions(&client)?, cli.json)?
         }
-        Command::R53 { create, comment } => {
+        Command::R53 {
+            create,
+            upsert_txt,
+            delete_txt,
+            zone_id,
+            value,
+            ttl,
+            comment,
+        } => {
             if let Some(domain) = create {
                 let caller = format!(
                     "awsw-v2-{}-{}",
@@ -265,7 +301,33 @@ fn run() -> Result<()> {
                     }
                 }
             } else {
-                render_route53(services::route53::list_hosted_zones(&client)?, cli.json)?;
+                let is_upsert = upsert_txt.is_some();
+                if let Some(name) = upsert_txt.or(delete_txt) {
+                    let action = if is_upsert {
+                        services::route53::RecordChangeAction::Upsert
+                    } else {
+                        services::route53::RecordChangeAction::Delete
+                    };
+                    let response = services::route53::change_txt_record(
+                        &client,
+                        zone_id.as_deref().expect("validated Route 53 zone ID"),
+                        action,
+                        &name,
+                        ttl,
+                        &value,
+                        &comment,
+                    )?;
+                    if cli.json {
+                        print_json(&response)?;
+                    } else {
+                        let action = if is_upsert { "UPSERT" } else { "DELETE" };
+                        section(&format!("Route53 TXT {action} submitted"));
+                        println!("  ChangeId : {}", response.change_info.id);
+                        println!("  Status   : {}", response.change_info.status);
+                    }
+                } else {
+                    render_route53(services::route53::list_hosted_zones(&client)?, cli.json)?;
+                }
             }
         }
         Command::Billing => {
@@ -278,6 +340,39 @@ fn run() -> Result<()> {
             } else {
                 render_discover(inventory)?;
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_cli(cli: &Cli) -> Result<()> {
+    if let Command::R53 {
+        upsert_txt,
+        delete_txt,
+        zone_id,
+        value,
+        ttl,
+        ..
+    } = &cli.command
+    {
+        if upsert_txt.is_some() || delete_txt.is_some() {
+            if zone_id.as_deref().is_none_or(str::is_empty) {
+                return Err(Error::InvalidRequest(
+                    "--zone-id is required with --upsert-txt or --delete-txt".into(),
+                ));
+            }
+            if value.is_empty() {
+                return Err(Error::InvalidRequest(
+                    "at least one --value is required with --upsert-txt or --delete-txt".into(),
+                ));
+            }
+            if *ttl == 0 {
+                return Err(Error::InvalidRequest("--ttl must be positive".into()));
+            }
+        } else if zone_id.is_some() || !value.is_empty() || *ttl != 60 {
+            return Err(Error::InvalidRequest(
+                "--zone-id, --value, and --ttl require --upsert-txt or --delete-txt".into(),
+            ));
         }
     }
     Ok(())

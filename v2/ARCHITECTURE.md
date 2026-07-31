@@ -150,7 +150,7 @@ This behavior is appropriate for discovery, but callers requiring proof of compl
 
 ## Write-operation containment
 
-Route 53 zone creation is the only write. It is not part of `discover`, has no alias shorter than `r53 --create DOMAIN`, and is not exercised in live tests. Its caller reference contains the normalized domain and current epoch milliseconds to make retries distinguishable. AWS remains the idempotency and conflict authority.
+Route 53 zone creation and explicit TXT UPSERT/DELETE operations are the only writes. They are not part of `discover` and are not exercised in live tests. Zone creation has no alias shorter than `r53 --create DOMAIN`; its caller reference contains the normalized domain and current epoch milliseconds to make retries distinguishable. TXT changes require a hosted-zone ID, record name, and value set. AWS remains the idempotency and conflict authority.
 
 A stricter enclave deployment should compile writes behind a feature flag or remove them entirely from an audit-only binary.
 

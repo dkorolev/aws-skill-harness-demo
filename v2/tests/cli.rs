@@ -33,3 +33,37 @@ fn help_exposes_the_complete_inventory_surface() {
         assert!(help.contains(command), "missing {command} from help");
     }
 }
+
+#[test]
+fn route53_help_exposes_txt_record_changes() {
+    let output = Command::new(env!("CARGO_BIN_EXE_awsw-v2"))
+        .args(["r53", "--help"])
+        .output()
+        .expect("run awsw-v2 r53 --help");
+    assert!(output.status.success());
+    let help = String::from_utf8(output.stdout).expect("UTF-8 help");
+    for option in [
+        "--upsert-txt",
+        "--delete-txt",
+        "--zone-id",
+        "--value",
+        "--ttl",
+    ] {
+        assert!(help.contains(option), "missing {option} from Route 53 help");
+    }
+}
+
+#[test]
+fn route53_txt_change_validates_required_arguments_before_credentials() {
+    let output = Command::new(env!("CARGO_BIN_EXE_awsw-v2"))
+        .args(["r53", "--upsert-txt", "_acme-challenge.example.com"])
+        .env_remove("AWS_ACCESS_KEY_ID")
+        .env_remove("AWS_SECRET_ACCESS_KEY")
+        .env("AWS_SHARED_CREDENTIALS_FILE", "/does/not/exist")
+        .output()
+        .expect("run invalid Route 53 change");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 stderr");
+    assert!(stderr.contains("--zone-id is required"), "{stderr}");
+    assert!(!stderr.contains("credentials unavailable"), "{stderr}");
+}

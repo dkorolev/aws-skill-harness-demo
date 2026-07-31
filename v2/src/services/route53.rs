@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{AwsClient, Result, protocols::rest_xml};
+use crate::{AwsClient, Error, Result, protocols::rest_xml};
 
 const ENDPOINT: &str = "route53.amazonaws.com";
 const PREFIX: &str = "/2013-04-01";
@@ -166,6 +166,78 @@ pub struct ChangeInfo {
     pub submitted_at: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ChangeResponse {
+    pub change_info: ChangeInfo,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum RecordChangeAction {
+    Upsert,
+    Delete,
+}
+
+impl RecordChangeAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Upsert => "UPSERT",
+            Self::Delete => "DELETE",
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename = "ChangeResourceRecordSetsRequest", rename_all = "PascalCase")]
+struct ChangeRecordsRequest<'a> {
+    #[serde(rename = "@xmlns")]
+    xmlns: &'static str,
+    change_batch: ChangeBatch<'a>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct ChangeBatch<'a> {
+    #[serde(skip_serializing_if = "str::is_empty")]
+    comment: &'a str,
+    changes: Changes<'a>,
+}
+
+#[derive(Debug, Serialize)]
+struct Changes<'a> {
+    #[serde(rename = "Change")]
+    values: Vec<RecordChange<'a>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct RecordChange<'a> {
+    action: &'static str,
+    resource_record_set: RecordSetChange<'a>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct RecordSetChange<'a> {
+    name: &'a str,
+    r#type: &'static str,
+    #[serde(rename = "TTL")]
+    ttl: u64,
+    resource_records: ChangeResourceRecords,
+}
+
+#[derive(Debug, Serialize)]
+struct ChangeResourceRecords {
+    #[serde(rename = "ResourceRecord")]
+    values: Vec<ChangeResourceRecord>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct ChangeResourceRecord {
+    value: String,
+}
+
 pub fn list_hosted_zones(client: &AwsClient) -> Result<Vec<HostedZone>> {
     let mut marker: Option<String> = None;
     let mut zones = Vec::new();
@@ -274,6 +346,78 @@ pub fn create_hosted_zone(
     )
 }
 
+pub fn change_txt_record(
+    client: &AwsClient,
+    hosted_zone_id: &str,
+    action: RecordChangeAction,
+    name: &str,
+    ttl: u64,
+    values: &[String],
+    comment: &str,
+) -> Result<ChangeResponse> {
+    let hosted_zone_id = hosted_zone_id
+        .strip_prefix("/hostedzone/")
+        .unwrap_or(hosted_zone_id);
+    if hosted_zone_id.is_empty() {
+        return Err(Error::InvalidRequest(
+            "hosted zone ID cannot be empty".into(),
+        ));
+    }
+    if name.is_empty() {
+        return Err(Error::InvalidRequest(
+            "TXT record name cannot be empty".into(),
+        ));
+    }
+    if ttl == 0 {
+        return Err(Error::InvalidRequest(
+            "TXT record TTL must be positive".into(),
+        ));
+    }
+    if values.is_empty() {
+        return Err(Error::InvalidRequest(
+            "at least one TXT record value is required".into(),
+        ));
+    }
+
+    let resource_records = ChangeResourceRecords {
+        values: values
+            .iter()
+            .map(|value| ChangeResourceRecord {
+                value: quote_txt_value(value),
+            })
+            .collect(),
+    };
+    rest_xml::post_xml(
+        client,
+        "route53",
+        "us-east-1",
+        ENDPOINT,
+        &format!("{PREFIX}/hostedzone/{hosted_zone_id}/rrset"),
+        &ChangeRecordsRequest {
+            xmlns: NAMESPACE,
+            change_batch: ChangeBatch {
+                comment,
+                changes: Changes {
+                    values: vec![RecordChange {
+                        action: action.as_str(),
+                        resource_record_set: RecordSetChange {
+                            name,
+                            r#type: "TXT",
+                            ttl,
+                            resource_records,
+                        },
+                    }],
+                },
+            },
+        },
+    )
+}
+
+fn quote_txt_value(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,5 +446,53 @@ mod tests {
         )
         .unwrap();
         assert_eq!(response.resource_record_sets.values[0].ttl, Some(300));
+    }
+
+    #[test]
+    fn change_txt_payload_has_route53_wire_shape_and_escaping() {
+        let request = ChangeRecordsRequest {
+            xmlns: NAMESPACE,
+            change_batch: ChangeBatch {
+                comment: "Let's Encrypt & friends",
+                changes: Changes {
+                    values: vec![RecordChange {
+                        action: RecordChangeAction::Upsert.as_str(),
+                        resource_record_set: RecordSetChange {
+                            name: "_acme-challenge.example.com",
+                            r#type: "TXT",
+                            ttl: 60,
+                            resource_records: ChangeResourceRecords {
+                                values: vec![ChangeResourceRecord {
+                                    value: quote_txt_value("proof-token"),
+                                }],
+                            },
+                        },
+                    }],
+                },
+            },
+        };
+        let xml = quick_xml::se::to_string(&request).unwrap();
+        assert!(xml.contains("<Action>UPSERT</Action>"));
+        assert!(xml.contains("<Name>_acme-challenge.example.com</Name>"));
+        assert!(xml.contains("<Type>TXT</Type><TTL>60</TTL>"));
+        assert!(xml.contains("<Value>\"proof-token\"</Value>"), "{xml}");
+        assert!(xml.contains("Let's Encrypt &amp; friends"));
+        assert!(xml.contains("xmlns=\"https://route53.amazonaws.com/doc/2013-04-01/\""));
+    }
+
+    #[test]
+    fn txt_values_are_quoted_for_route53() {
+        assert_eq!(quote_txt_value("proof-token"), r#""proof-token""#);
+        assert_eq!(quote_txt_value(r#"a\b"c"#), r#""a\\b\"c""#);
+    }
+
+    #[test]
+    fn decodes_change_response() {
+        let response: ChangeResponse = quick_xml::de::from_str(
+            r#"<ChangeResourceRecordSetsResponse><ChangeInfo><Id>/change/C123</Id><Status>PENDING</Status><SubmittedAt>2026-07-31T12:00:00Z</SubmittedAt></ChangeInfo></ChangeResourceRecordSetsResponse>"#,
+        )
+        .unwrap();
+        assert_eq!(response.change_info.id, "/change/C123");
+        assert_eq!(response.change_info.status, "PENDING");
     }
 }
