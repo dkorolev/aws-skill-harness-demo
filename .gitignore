@@ -1,0 +1,29 @@
+# Nothing account-specific is ever committed to this repository.
+
+# Transient run state created by E2E-HARNESS.md: resource IDs, operator IP, SSH key material.
+e2e-scratch*
+simpletest-key*
+
+# Private run records and account reports: they carry account IDs, IPs, hostnames, and resource IDs.
+# The one committed run log is the sanitized E2E-RUN-LOG-EXAMPLE.md.
+E2E-RUN-LOG-*.md
+!E2E-RUN-LOG-EXAMPLE.md
+HARNESS-COMMENTS-*.md
+AUDIT-REPORT-*.md
+AWS-*.md
+
+# Credentials and local configuration.
+.aws/
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Build output and editor droppings.
+target/
+*.log
+.DS_Store
+.idea/
+.vscode/
