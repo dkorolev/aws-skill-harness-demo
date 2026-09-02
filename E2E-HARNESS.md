@@ -19,7 +19,7 @@ Revision 3, hardened by executor feedback from two prior full runs. Treat this d
 
 **Scratch file**: record every created resource ID as you go — the teardown consumes it. Format: shell-sourceable, `export KEY="value"` lines only, values always double-quoted (unquoted values with spaces break `source`). Full-line `#` comments are fine. Keep it in `$WORKDIR`; **never write it anywhere under the repository tree** (`.gitignore` can guard the commit, but the rule guards the leak). The teardown DELETE for `simpletest.example.com` must use **`$IP1` — the stale value from Phase 3 — never `$IP2`**; freeze `IP1` in the scratch file and do not overwrite it at Phase 11.
 
-**Git / run-log policy**: at run start, create `E2E-RUN-LOG-YYYY-MM-DD-HH-MM-SS.md` (timestamp = run start, local time) and log the run there: one section per phase with the key outputs, resource IDs, and the CHECK verdict. Commit **after each passing phase**, and the commit must touch **only the run-log file** (message: `E2E run <timestamp>: phase N passed`). Do not commit anything else during the run — not the app files (they are already embedded in this harness) and **never** the scratch file or key material (transient state, operator IP, private key). Commit the phase-N log entry **before beginning phase N+1** — writing two phases and committing once blurs the audit trail. If a phase fails, log the failure, commit the failure entry, run the Appendix A emergency teardown, and stop.
+**Run-log policy**: at run start, create `E2E-RUN-LOG-YYYY-MM-DD-HH-MM-SS.md` (timestamp = run start, local time) in the repository root and log the run there: one section per phase with the key outputs, resource IDs, and the CHECK verdict. Write the phase-N entry **before beginning phase N+1** — writing two phases at once blurs the audit trail. The log stays local: `.gitignore` excludes `E2E-RUN-LOG-*.md` because it carries the account ID, IPs, hostnames, and resource IDs, and the only committed run log is the sanitized [E2E-RUN-LOG-EXAMPLE.md](E2E-RUN-LOG-EXAMPLE.md). Commit nothing during a run — not the log, not the app files (they are already in the repository), and **never** the scratch file or key material (transient state, operator IP, private key). If a phase fails, log the failure, run the Appendix A emergency teardown, and stop.
 
 ## ⚠️ Ground rules
 
@@ -86,48 +86,13 @@ If anything other than `terminated` instances shows up, run the Appendix A emerg
 
 ## Phase 1 — the application
 
-`counting_echo.py` — stdlib only, listens on 0.0.0.0:8000. Each response carries a monotonically increasing in-memory counter plus an echo of the request. The counter resets on process restart — that is expected and is used later as evidence of a restart.
+The application is two files in the repository root. [`counting_echo.py`](counting_echo.py) is a stdlib-only HTTP server listening on 0.0.0.0:8000; each response carries a monotonically increasing in-memory counter plus an echo of the request. The counter resets on process restart — that is expected and is used later as evidence of a restart. [`counting-echo.service`](counting-echo.service) is the systemd unit that starts it on boot and restarts it on crash (this is what "survives restart" means).
 
-```python
-#!/usr/bin/env python3
-"""Counting echo server: GET anything, get back a counter + echo."""
-import itertools
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+Copy both into `$WORKDIR`; Phase 4 ships them to the instance from there. Do not edit the copies in the repository during a run.
 
-counter = itertools.count(1)
-
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        body = f"count={next(counter)} path={self.path} host={self.headers.get('Host')}\n"
-        data = body.encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-    def log_message(self, *a):
-        pass
-
-ThreadingHTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
+```sh
+cp counting_echo.py counting-echo.service "$WORKDIR/"
 ```
-
-`counting-echo.service` — systemd unit so the service starts on boot and restarts on crash (this is what "survives restart" means):
-
-```ini
-[Unit]
-Description=Counting echo server (simpletest)
-After=network.target
-
-[Service]
-ExecStart=/usr/bin/python3 /opt/counting_echo.py
-Restart=always
-User=ec2-user
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Write both into `$WORKDIR` (not the repo — they are already embedded here).
 
 **CHECK**: `python3 $WORKDIR/counting_echo.py` runs locally and `curl localhost:8000/x` returns `count=1 path=/x ...`, second curl returns `count=2 ...`. Kill it.
 

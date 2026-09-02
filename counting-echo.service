@@ -1,0 +1,11 @@
+[Unit]
+Description=Counting echo server (simpletest)
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/counting_echo.py
+Restart=always
+User=ec2-user
+
+[Install]
+WantedBy=multi-user.target
