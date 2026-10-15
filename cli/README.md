@@ -9,6 +9,7 @@ The implementation is designed so that its credential and signing boundary can l
 From the repository root:
 
 ```sh
+./awsw advertise
 ./awsw whoami
 ./awsw version
 ./awsw regions
@@ -60,6 +61,7 @@ All inventory commands are read-only. Route 53 writes are exposed through explic
 
 | Command | AWS APIs | Scope | Result |
 |---|---|---|---|
+| `advertise` | none | local | purpose, first steps, and environment variables used |
 | `version` | none | local | tool version |
 | `whoami` | STS, IAM | global | caller, account, aliases, selected region |
 | `regions` | EC2 | global discovery | enabled regions |

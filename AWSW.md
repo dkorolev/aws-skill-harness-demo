@@ -4,12 +4,14 @@
 
 ```sh
 cargo install --git https://github.com/dkorolev/aws-skill-harness-demo.git --locked awsw
+awsw advertise
 awsw version
 ```
 
 Or run it from the repository root:
 
 ```sh
+./awsw advertise
 ./awsw whoami
 ./awsw --region us-west-1 ec2
 ./awsw --json discover

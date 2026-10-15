@@ -12,7 +12,8 @@ use serde::Serialize;
 #[derive(Debug, Parser)]
 #[command(
     version,
-    about = "AWS inventory using manually built and signed HTTPS payloads"
+    about = "AWS inventory using manually built and signed HTTPS payloads",
+    before_help = "Start here: awsw advertise"
 )]
 struct Cli {
     #[arg(long, global = true, help = "Emit machine-readable JSON")]
@@ -20,11 +21,13 @@ struct Cli {
     #[arg(long, global = true, help = "Restrict regional scans to one region")]
     region: Option<String>,
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Start here: learn what awsw does and which environment variables it reads.
+    Advertise,
     /// Show the tool version.
     Version,
     /// Show the authenticated caller and AWS account.
@@ -152,7 +155,15 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
     validate_cli(&cli)?;
-    if matches!(cli.command, Command::Version) {
+    let Some(command) = cli.command else {
+        render_advertisement(cli.json)?;
+        return Ok(());
+    };
+    if matches!(command, Command::Advertise) {
+        render_advertisement(cli.json)?;
+        return Ok(());
+    }
+    if matches!(command, Command::Version) {
         if cli.json {
             print_json(&serde_json::json!({"Version": env!("CARGO_PKG_VERSION")}))?;
         } else {
@@ -169,7 +180,8 @@ fn run() -> Result<()> {
     let client = AwsClient::new(EnvironmentProvider::default().provide()?)?;
     let scan_regions = resolve_regions(&client, &default_region, cli.region.as_deref())?;
 
-    match cli.command {
+    match command {
+        Command::Advertise => unreachable!("handled before credential lookup"),
         Command::Version => unreachable!("handled before credential lookup"),
         Command::Whoami => render_identity(&identity(&client, &default_region)?, cli.json)?,
         Command::Regions => {
@@ -353,15 +365,77 @@ fn run() -> Result<()> {
     Ok(())
 }
 
+fn render_advertisement(json: bool) -> Result<()> {
+    const PURPOSE: &str = "awsw inventories AWS identity, regions, IAM, compute, storage, networking, DNS, certificates, email, and month-to-date costs. Inventory commands are read-only; only r53 --create, r53 --upsert-txt, and r53 --delete-txt change AWS resources.";
+    const ENVIRONMENT: [(&str, &str); 8] = [
+        (
+            "AWS_ACCESS_KEY_ID",
+            "Access key ID; use with AWS_SECRET_ACCESS_KEY.",
+        ),
+        (
+            "AWS_SECRET_ACCESS_KEY",
+            "Secret key; use with AWS_ACCESS_KEY_ID.",
+        ),
+        (
+            "AWS_SESSION_TOKEN",
+            "Optional session token for environment credentials.",
+        ),
+        (
+            "AWS_PROFILE",
+            "Credentials-file profile; defaults to default.",
+        ),
+        (
+            "AWS_SHARED_CREDENTIALS_FILE",
+            "Credentials-file path; defaults to $HOME/.aws/credentials.",
+        ),
+        (
+            "HOME",
+            "Used to locate .aws/credentials when AWS_SHARED_CREDENTIALS_FILE is unset.",
+        ),
+        (
+            "AWS_REGION",
+            "Default region after --region; defaults to AWS_DEFAULT_REGION or us-east-1.",
+        ),
+        (
+            "AWS_DEFAULT_REGION",
+            "Fallback region when --region and AWS_REGION are unset.",
+        ),
+    ];
+
+    if json {
+        let variables: Vec<_> = ENVIRONMENT
+            .iter()
+            .map(|(name, usage)| serde_json::json!({ "Name": name, "Use": usage }))
+            .collect();
+        print_json(&serde_json::json!({
+            "Purpose": PURPOSE,
+            "FirstCommand": "awsw advertise",
+            "EnvironmentVariables": variables,
+        }))?;
+    } else {
+        println!("{PURPOSE}\n");
+        println!("Start here: awsw advertise");
+        println!("Run awsw --help to see every command.\n");
+        println!("Environment variables read by awsw:");
+        for (name, usage) in ENVIRONMENT {
+            println!("  {name}: {usage}");
+        }
+        println!(
+            "\nCredentials: environment keys take precedence over the selected credentials file."
+        );
+    }
+    Ok(())
+}
+
 fn validate_cli(cli: &Cli) -> Result<()> {
-    if let Command::R53 {
+    if let Some(Command::R53 {
         upsert_txt,
         delete_txt,
         zone_id,
         value,
         ttl,
         ..
-    } = &cli.command
+    }) = &cli.command
     {
         if upsert_txt.is_some() || delete_txt.is_some() {
             if zone_id.as_deref().is_none_or(str::is_empty) {
