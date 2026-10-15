@@ -197,9 +197,6 @@ jq empty inventory.json
 
 Do not automate `r53 --create` as part of a smoke test. It creates a billable, persistent account resource and is intentionally excluded from live tests; its payload construction and escaping are tested offline.
 
-## Repository migration status
+## Repository launcher
 
-- `./awsw-v2` launches this Rust crate.
-- `../awsw-v1-obsolete` is the old AWS CLI-backed implementation.
-
-The obsolete v1 source remains temporarily useful as a behavioral reference. New features and fixes belong in this Rust crate.
+`./awsw-v2` launches this Rust crate. The former AWS CLI-backed implementation remains available in Git history for reference.

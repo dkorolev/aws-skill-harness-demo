@@ -15,7 +15,7 @@ Produce a detailed, evidence-rich run rather than a terse summary. Show concise 
 ## Enforce the safety boundary
 
 - Use only `./awsw-v2` for AWS API calls.
-- Never invoke `aws`, an AWS SDK, boto, botocore, `awsw-v1-obsolete`, or direct AWS HTTP calls.
+- Never invoke `aws`, an AWS SDK, boto, botocore, or direct AWS HTTP calls.
 - Run inventory operations only: `whoami`, `regions`, `iam`, `ec2`, `sgs`, `volumes`, `elb`, `certs`, `rds`, `ecs`, `eips`, `snapshots`, `amis`, `vpce`, `ses`, `s3`, `cloudfront`, `r53`, `billing`, and `discover`.
 - Never run `r53 --create`.
 - Never create, update, delete, stop, start, terminate, release, revoke, rotate, or otherwise modify an AWS resource.
