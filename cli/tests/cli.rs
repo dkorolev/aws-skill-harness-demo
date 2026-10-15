@@ -2,10 +2,10 @@ use std::process::Command;
 
 #[test]
 fn help_exposes_the_complete_inventory_surface() {
-    let output = Command::new(env!("CARGO_BIN_EXE_awsw-v2"))
+    let output = Command::new(env!("CARGO_BIN_EXE_awsw"))
         .arg("--help")
         .output()
-        .expect("run awsw-v2 --help");
+        .expect("run awsw --help");
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).expect("UTF-8 help");
     for command in [
@@ -37,11 +37,11 @@ fn help_exposes_the_complete_inventory_surface() {
 
 #[test]
 fn version_works_without_aws_credentials() {
-    let binary = env!("CARGO_BIN_EXE_awsw-v2");
+    let binary = env!("CARGO_BIN_EXE_awsw");
     for (args, expected) in [
         (
             vec!["version"],
-            format!("awsw-v2 {}\n", env!("CARGO_PKG_VERSION")),
+            format!("awsw {}\n", env!("CARGO_PKG_VERSION")),
         ),
         (
             vec!["--json", "version"],
@@ -54,7 +54,7 @@ fn version_works_without_aws_credentials() {
             .env_remove("AWS_SECRET_ACCESS_KEY")
             .env("AWS_SHARED_CREDENTIALS_FILE", "/does/not/exist")
             .output()
-            .expect("run awsw-v2 version");
+            .expect("run awsw version");
         assert!(
             output.status.success(),
             "{}",
@@ -69,10 +69,10 @@ fn version_works_without_aws_credentials() {
 
 #[test]
 fn route53_help_exposes_txt_record_changes() {
-    let output = Command::new(env!("CARGO_BIN_EXE_awsw-v2"))
+    let output = Command::new(env!("CARGO_BIN_EXE_awsw"))
         .args(["r53", "--help"])
         .output()
-        .expect("run awsw-v2 r53 --help");
+        .expect("run awsw r53 --help");
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).expect("UTF-8 help");
     for option in [
@@ -88,7 +88,7 @@ fn route53_help_exposes_txt_record_changes() {
 
 #[test]
 fn route53_txt_change_validates_required_arguments_before_credentials() {
-    let output = Command::new(env!("CARGO_BIN_EXE_awsw-v2"))
+    let output = Command::new(env!("CARGO_BIN_EXE_awsw"))
         .args(["r53", "--upsert-txt", "_acme-challenge.example.com"])
         .env_remove("AWS_ACCESS_KEY_ID")
         .env_remove("AWS_SECRET_ACCESS_KEY")

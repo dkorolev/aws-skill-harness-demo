@@ -4,7 +4,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use awsw_v2::{AwsClient, CredentialProvider, EnvironmentProvider, Error, Result, services};
+use awsw::{AwsClient, CredentialProvider, EnvironmentProvider, Error, Result, services};
 use clap::{Parser, Subcommand};
 use rayon::prelude::*;
 use serde::Serialize;
@@ -144,7 +144,7 @@ struct Inventory {
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("awsw-v2: {error}");
+        eprintln!("awsw: {error}");
         std::process::exit(1);
     }
 }
@@ -156,7 +156,7 @@ fn run() -> Result<()> {
         if cli.json {
             print_json(&serde_json::json!({"Version": env!("CARGO_PKG_VERSION")}))?;
         } else {
-            println!("awsw-v2 {}", env!("CARGO_PKG_VERSION"));
+            println!("awsw {}", env!("CARGO_PKG_VERSION"));
         }
         return Ok(());
     }
@@ -269,7 +269,7 @@ fn run() -> Result<()> {
         } => {
             if let Some(domain) = create {
                 let caller = format!(
-                    "awsw-v2-{}-{}",
+                    "awsw-{}-{}",
                     domain.trim_end_matches('.'),
                     SystemTime::now()
                         .duration_since(UNIX_EPOCH)
@@ -277,10 +277,7 @@ fn run() -> Result<()> {
                         .as_millis()
                 );
                 let comment = if comment.is_empty() {
-                    format!(
-                        "created by awsw-v2 {}",
-                        chrono::Utc::now().format("%Y-%m-%d")
-                    )
+                    format!("created by awsw {}", chrono::Utc::now().format("%Y-%m-%d"))
                 } else {
                     comment
                 };

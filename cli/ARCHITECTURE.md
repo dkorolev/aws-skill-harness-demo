@@ -1,4 +1,4 @@
-# awsw v2 architecture and enclave design notes
+# awsw architecture and enclave design notes
 
 This document describes the internal boundaries of the Rust implementation, why they exist, and how they map to a future trusted execution environment.
 
@@ -159,7 +159,7 @@ A stricter enclave deployment should compile writes behind a feature flag or rem
 `Cargo.lock` is committed. Release builders should use:
 
 ```sh
-cargo build --locked --release --manifest-path v2/Cargo.toml
+cargo build --locked --release --manifest-path cli/Cargo.toml
 ```
 
 For measured deployment, also pin the Rust toolchain, vendor crates, record source checksums, strip nondeterministic metadata where possible, and compare the final binary measurement in CI and the attestation policy.

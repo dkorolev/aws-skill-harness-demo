@@ -1,6 +1,6 @@
-# awsw v2 — typed, manually signed AWS inventory
+# awsw — typed, manually signed AWS inventory
 
-`awsw-v2` inventories an AWS account without the AWS CLI, an AWS SDK, botocore, Smithy-generated clients, or an implicit credential daemon. It is a Rust implementation of the repository's original account-reporting tool and constructs AWS request payloads and Signature Version 4 authorization headers inside the process.
+`awsw` inventories an AWS account without the AWS CLI, an AWS SDK, botocore, Smithy-generated clients, or an implicit credential daemon. It is a Rust implementation of the repository's original account-reporting tool and constructs AWS request payloads and Signature Version 4 authorization headers inside the process.
 
 The implementation is designed so that its credential and signing boundary can later move into a secure enclave or trusted execution environment (TEE). It is not itself an enclave today; see [Security model](#security-model) and [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -9,21 +9,32 @@ The implementation is designed so that its credential and signing boundary can l
 From the repository root:
 
 ```sh
-./awsw-v2 whoami
-./awsw-v2 version
-./awsw-v2 regions
-./awsw-v2 --region us-west-1 ec2
-./awsw-v2 --json discover
+./awsw whoami
+./awsw version
+./awsw regions
+./awsw --region us-west-1 ec2
+./awsw --json discover
 ```
 
 Or build and run the crate directly:
 
 ```sh
-cargo build --manifest-path v2/Cargo.toml --release
-v2/target/release/awsw-v2 whoami
+cargo build --manifest-path cli/Cargo.toml --release
+cli/target/release/awsw whoami
 ```
 
-The root launcher uses `cargo run --quiet`; Cargo rebuilds only when a source or dependency changed. A release deployment should install the release binary and does not need Cargo at runtime.
+The root launcher uses `cargo run --quiet`; Cargo rebuilds only when a source or dependency changed.
+
+## Install without a checkout
+
+Install the published Git repository directly with Cargo:
+
+```sh
+cargo install --git https://github.com/dkorolev/aws-skill-harness-demo.git --locked awsw
+awsw version
+```
+
+Cargo places the binary in `$HOME/.cargo/bin` by default. Add that directory to your `PATH` if needed. The installed binary runs without this repository or Cargo; Cargo is needed only to build or update it. To update from the latest `main`, run the same `cargo install` command with `--force`.
 
 ## What “manual” means
 
@@ -77,11 +88,11 @@ All inventory commands are read-only. Route 53 writes are exposed through explic
 For a Let's Encrypt DNS-01 challenge, pass the TXT value without DNS quotes; the client adds the quotes Route 53 requires and safely serializes the request:
 
 ```sh
-./awsw-v2 r53 --upsert-txt _acme-challenge.example.com \
+./awsw r53 --upsert-txt _acme-challenge.example.com \
   --zone-id Z1234567890 --value challenge-token --ttl 60
 
 # After certificate issuance, use the same TTL and complete value set:
-./awsw-v2 r53 --delete-txt _acme-challenge.example.com \
+./awsw r53 --delete-txt _acme-challenge.example.com \
   --zone-id Z1234567890 --value challenge-token --ttl 60
 ```
 
@@ -90,11 +101,11 @@ Repeat `--value` for a multi-value TXT record set. Route 53 requires a DELETE to
 Use `--region REGION` before or after a subcommand to restrict regional scans:
 
 ```sh
-./awsw-v2 ec2 --region eu-north-1
-./awsw-v2 --region eu-north-1 discover
+./awsw ec2 --region eu-north-1
+./awsw --region eu-north-1 discover
 ```
 
-Use `--json` for stable machine-readable output. Without it, v2 prints compact human-readable tables compatible in spirit with the original tool.
+Use `--json` for stable machine-readable output. Without it, `awsw` prints compact human-readable tables.
 
 ## Credentials and region selection
 
@@ -180,18 +191,18 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for module-level details and design decis
 Offline verification:
 
 ```sh
-cargo fmt --manifest-path v2/Cargo.toml -- --check
-cargo test --manifest-path v2/Cargo.toml
-cargo clippy --manifest-path v2/Cargo.toml --all-targets -- -D warnings
-cargo build --manifest-path v2/Cargo.toml --release
+cargo fmt --manifest-path cli/Cargo.toml -- --check
+cargo test --manifest-path cli/Cargo.toml
+cargo clippy --manifest-path cli/Cargo.toml --all-targets -- -D warnings
+cargo build --manifest-path cli/Cargo.toml --release
 ```
 
 Read-only live smoke tests:
 
 ```sh
-./awsw-v2 --json whoami
-./awsw-v2 --json regions
-./awsw-v2 --region eu-north-1 --json discover > inventory.json
+./awsw --json whoami
+./awsw --json regions
+./awsw --region eu-north-1 --json discover > inventory.json
 jq empty inventory.json
 ```
 
@@ -199,4 +210,4 @@ Do not automate `r53 --create` as part of a smoke test. It creates a billable, p
 
 ## Repository launcher
 
-`./awsw-v2` launches this Rust crate. The former AWS CLI-backed implementation remains available in Git history for reference.
+`./awsw` launches this Rust crate. The former AWS CLI-backed implementation remains available in Git history for reference.

@@ -1,14 +1,14 @@
 # Audit Harness: full read-only AWS account audit
 
-A phase-by-phase runbook that inventories everything in an AWS account, cross-checks the inventory against the bill, and classifies findings — wasted spend, dangling DNS, IAM hygiene — with an explicit severity model. Companion tool: [`awsw-v2`](awsw-v2), a Rust client that constructs and signs AWS HTTPS payloads without the AWS CLI or an AWS SDK. Every inventory command in this harness is read-only; **the audit changes nothing**. Remediation is a separate, separately-authorized step.
+A phase-by-phase runbook that inventories everything in an AWS account, cross-checks the inventory against the bill, and classifies findings — wasted spend, dangling DNS, IAM hygiene — with an explicit severity model. Companion tool: [`awsw`](awsw), a Rust client that constructs and signs AWS HTTPS payloads without the AWS CLI or an AWS SDK. Every inventory command in this harness is read-only; **the audit changes nothing**. Remediation is a separate, separately-authorized step.
 
 **Executor contract**: run phases in order; each ends with what to RECORD. Write findings into `AUDIT-REPORT-YYYY-MM-DD.md` as you go — inventory tables first, findings after, suggested (not executed) remediation last. Never paste credentials, key material, or secret values into the report.
 
 ## Phase 0 — identity and scope
 
 ```sh
-./awsw-v2 whoami
-./awsw-v2 regions
+./awsw whoami
+./awsw regions
 ```
 
 RECORD: account ID, caller ARN, default region, region count.
@@ -22,7 +22,7 @@ RECORD: account ID, caller ARN, default region, region count.
 Run billing *before* the inventory: the bill is the one list that cannot miss a resource. Every service charging money must show up in the inventory sweep, and every populated region must be explainable.
 
 ```sh
-./awsw-v2 billing         # month-to-date, by service and by region (us-east-1 Cost Explorer)
+./awsw billing         # month-to-date, by service and by region (us-east-1 Cost Explorer)
 ```
 
 RECORD: cost by service, cost by region, total.
@@ -35,7 +35,7 @@ RECORD: cost by service, cost by region, total.
 ## Phase 2 — full inventory sweep
 
 ```sh
-./awsw-v2 discover        # everything, all regions, in parallel
+./awsw discover        # everything, all regions, in parallel
 ```
 
 Or piecemeal: `ec2`, `volumes`, `snapshots`, `amis`, `eips`, `sgs`, `elb`, `certs`, `rds`, `ecs`, `vpce`, `ses`, `s3`, `cloudfront`, `r53` — each takes `--region` to narrow and `--json` for machine-readable output.
@@ -61,7 +61,7 @@ From the Phase 2 tables, flag:
 
 ## Phase 4 — TLS certificates
 
-From `./awsw-v2 certs`:
+From `./awsw certs`:
 
 - `EXPIRED` certificates → **finding**: delete (they cannot be renewed; re-issue instead). Verify `InUse: false` first — deletion fails otherwise, which is itself a finding (something is serving an expired cert).
 - `ISSUED` but `InUse: false` → note; unused certs are free but are a renewal-failure risk if their validation records are gone.
@@ -88,8 +88,8 @@ Also flag: `external-dns` ownership TXT leftovers from dead clusters, stale ACM/
 ## Phase 6 — IAM hygiene
 
 ```sh
-./awsw-v2 iam
-./awsw-v2 --json iam   # full per-user keys, MFA devices, groups, and policies
+./awsw iam
+./awsw --json iam   # full per-user keys, MFA devices, groups, and policies
 ```
 
 **Findings, in severity order:**
@@ -100,7 +100,7 @@ Also flag: `external-dns` ownership TXT leftovers from dead clusters, stale ACM/
 
 ## Phase 7 — security groups
 
-From `./awsw-v2 sgs` plus rule detail (the v2 JSON output preserves the summarized rule counts):
+From `./awsw sgs` plus rule detail (the JSON output preserves the summarized rule counts):
 
 - `0.0.0.0/0` on 22/3389 attached to **running** instances → finding (severity is a policy call — flag it, let the owner decide).
 - Default SGs with real inbound rules → finding: default groups should be empty; move rules to purpose-named groups.

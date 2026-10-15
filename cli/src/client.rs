@@ -65,7 +65,7 @@ impl AwsClient {
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(120))
-            .user_agent(concat!("awsw-v2/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("awsw/", env!("CARGO_PKG_VERSION")))
             .build()?;
         Ok(Self {
             credentials: Arc::new(credentials),

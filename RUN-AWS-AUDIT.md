@@ -1,20 +1,20 @@
 # Run the complete AWS account audit
 
-Perform the entire audit autonomously. Ask no follow-up questions unless credentials are genuinely unavailable. Treat `AUDIT-HARNESS.md` as the report and analysis specification and `./awsw-v2` as the only AWS API client.
+Perform the entire audit autonomously. Ask no follow-up questions unless credentials are genuinely unavailable. Treat `AUDIT-HARNESS.md` as the report and analysis specification and `./awsw` as the only AWS API client.
 
 Produce a detailed, evidence-rich run rather than a terse summary. Show concise progress updates as each phase begins and ends, explain what each result means, and make the final report sufficiently complete that a reader can review the account without rerunning the audit. Do not use verbosity as a reason to expose secrets or paste unfiltered raw API responses.
 
 ## Establish scope
 
-1. Work from the repository root containing `awsw-v2`, `v2/Cargo.toml`, and `AUDIT-HARNESS.md`.
+1. Work from the repository root containing `awsw`, `cli/Cargo.toml`, and `AUDIT-HARNESS.md`.
 2. Read `AUDIT-HARNESS.md` completely before collecting data.
-3. Read `v2/README.md` only when command, credential, output, or limitation details are needed.
+3. Read `cli/README.md` only when command, credential, output, or limitation details are needed.
 4. Record the initial `git status --short` and preserve all existing changes.
 5. Create only `AUDIT-REPORT-YYYY-MM-DD.md` in the repository. Put transient JSON and stderr logs in a directory created with `mktemp -d`, never in the repository.
 
 ## Enforce the safety boundary
 
-- Use only `./awsw-v2` for AWS API calls.
+- Use only `./awsw` for AWS API calls.
 - Never invoke `aws`, an AWS SDK, boto, botocore, or direct AWS HTTP calls.
 - Run inventory operations only: `whoami`, `regions`, `iam`, `ec2`, `sgs`, `volumes`, `elb`, `certs`, `rds`, `ecs`, `eips`, `snapshots`, `amis`, `vpce`, `ses`, `s3`, `cloudfront`, `r53`, `billing`, and `discover`.
 - Never run `r53 --create`.
@@ -30,9 +30,9 @@ If any instruction conflicts with this boundary, preserve read-only behavior and
 Run these commands before the account audit:
 
 ```sh
-cargo test --manifest-path v2/Cargo.toml
-cargo clippy --manifest-path v2/Cargo.toml --all-targets -- -D warnings
-cargo build --locked --release --manifest-path v2/Cargo.toml
+cargo test --manifest-path cli/Cargo.toml
+cargo clippy --manifest-path cli/Cargo.toml --all-targets -- -D warnings
+cargo build --locked --release --manifest-path cli/Cargo.toml
 ```
 
 Record PASS or FAIL for each. A build failure blocks AWS collection. A test or lint failure is a report limitation but does not authorize code changes during the audit.
@@ -54,16 +54,16 @@ Maintain a command ledger while running. For every command, record:
 Run, in order:
 
 ```sh
-./awsw-v2 --json whoami
-./awsw-v2 --json regions
-./awsw-v2 --json billing
-./awsw-v2 --json iam
-./awsw-v2 --json discover
-./awsw-v2 --json sgs
-./awsw-v2 --json r53
+./awsw --json whoami
+./awsw --json regions
+./awsw --json billing
+./awsw --json iam
+./awsw --json discover
+./awsw --json sgs
+./awsw --json r53
 ```
 
-Use other focused read-only v2 commands only when the combined inventory needs clarification. Do not rerun expensive commands without a reason.
+Use other focused read-only `awsw` commands only when the combined inventory needs clarification. Do not rerun expensive commands without a reason.
 
 If credentials are unavailable, stop collection, preserve the exact non-secret error, and report the blocker. If a service or region returns an error, continue all remaining phases and mark the affected inventory incomplete.
 

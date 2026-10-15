@@ -385,13 +385,13 @@ aws route53 list-resource-record-sets --hosted-zone-id Z123456789EXAMPLE \
   --query 'ResourceRecordSets[?contains(Name,`simple`)]'              # []
 ```
 
-Then the belt-and-braces sweep with the bundled [`awsw-v2`](awsw-v2) tool, confirming the account is back to its pre-exercise baseline:
+Then the belt-and-braces sweep with the bundled [`awsw`](awsw) tool, confirming the account is back to its pre-exercise baseline:
 
 ```sh
-./awsw-v2 --region us-west-1 ec2   # no simpletest instance in any non-terminated state
-./awsw-v2 --region us-west-1 elb   # (none)
-./awsw-v2 eips                     # no addresses left behind (none were created)
-./awsw-v2 r53                      # no simple* records in the zone
+./awsw --region us-west-1 ec2   # no simpletest instance in any non-terminated state
+./awsw --region us-west-1 elb   # (none)
+./awsw eips                     # no addresses left behind (none were created)
+./awsw r53                      # no simple* records in the zone
 ```
 
 **CHECK**: all empty / back to the pre-exercise baseline. The exercise is complete when this phase passes, not before.
