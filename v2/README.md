@@ -10,6 +10,7 @@ From the repository root:
 
 ```sh
 ./awsw-v2 whoami
+./awsw-v2 version
 ./awsw-v2 regions
 ./awsw-v2 --region us-west-1 ec2
 ./awsw-v2 --json discover
@@ -48,6 +49,7 @@ All inventory commands are read-only. Route 53 writes are exposed through explic
 
 | Command | AWS APIs | Scope | Result |
 |---|---|---|---|
+| `version` | none | local | tool version |
 | `whoami` | STS, IAM | global | caller, account, aliases, selected region |
 | `regions` | EC2 | global discovery | enabled regions |
 | `iam` | IAM | global | summary, users, console access, keys, MFA, groups, policies |

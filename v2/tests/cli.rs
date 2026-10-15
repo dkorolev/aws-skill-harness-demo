@@ -9,6 +9,7 @@ fn help_exposes_the_complete_inventory_surface() {
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).expect("UTF-8 help");
     for command in [
+        "version",
         "whoami",
         "regions",
         "iam",
@@ -31,6 +32,38 @@ fn help_exposes_the_complete_inventory_surface() {
         "discover",
     ] {
         assert!(help.contains(command), "missing {command} from help");
+    }
+}
+
+#[test]
+fn version_works_without_aws_credentials() {
+    let binary = env!("CARGO_BIN_EXE_awsw-v2");
+    for (args, expected) in [
+        (
+            vec!["version"],
+            format!("awsw-v2 {}\n", env!("CARGO_PKG_VERSION")),
+        ),
+        (
+            vec!["--json", "version"],
+            format!("{{\n  \"Version\": \"{}\"\n}}\n", env!("CARGO_PKG_VERSION")),
+        ),
+    ] {
+        let output = Command::new(binary)
+            .args(args)
+            .env_remove("AWS_ACCESS_KEY_ID")
+            .env_remove("AWS_SECRET_ACCESS_KEY")
+            .env("AWS_SHARED_CREDENTIALS_FILE", "/does/not/exist")
+            .output()
+            .expect("run awsw-v2 version");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).expect("UTF-8 version"),
+            expected
+        );
     }
 }
 

@@ -25,6 +25,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Show the tool version.
+    Version,
     /// Show the authenticated caller and AWS account.
     Whoami,
     /// List enabled commercial AWS regions.
@@ -150,6 +152,14 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
     validate_cli(&cli)?;
+    if matches!(cli.command, Command::Version) {
+        if cli.json {
+            print_json(&serde_json::json!({"Version": env!("CARGO_PKG_VERSION")}))?;
+        } else {
+            println!("awsw-v2 {}", env!("CARGO_PKG_VERSION"));
+        }
+        return Ok(());
+    }
     let default_region = cli
         .region
         .clone()
@@ -160,6 +170,7 @@ fn run() -> Result<()> {
     let scan_regions = resolve_regions(&client, &default_region, cli.region.as_deref())?;
 
     match cli.command {
+        Command::Version => unreachable!("handled before credential lookup"),
         Command::Whoami => render_identity(&identity(&client, &default_region)?, cli.json)?,
         Command::Regions => {
             let mut regions = services::ec2::describe_regions(&client, &default_region)?;
