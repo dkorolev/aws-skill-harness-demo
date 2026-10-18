@@ -413,9 +413,40 @@ pub fn change_txt_record(
     )
 }
 
+/// Route 53 stores a TXT value as one or more quoted character strings, each
+/// at most 255 bytes long. Values longer than that (DKIM keys, long SPF) must
+/// be split into consecutive quoted chunks separated by a space; resolvers
+/// concatenate them back.
 fn quote_txt_value(value: &str) -> String {
+    const CHUNK: usize = 255;
     let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
+    if escaped.len() <= CHUNK {
+        return format!("\"{escaped}\"");
+    }
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    let bytes = escaped.as_bytes();
+    while start < bytes.len() {
+        let mut end = (start + CHUNK).min(bytes.len());
+        // Never split a UTF-8 sequence or separate a backslash from what it escapes.
+        while end < bytes.len() && !escaped.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end < bytes.len() && trailing_backslashes(&bytes[start..end]) % 2 == 1 {
+            end -= 1;
+        }
+        chunks.push(format!("\"{}\"", &escaped[start..end]));
+        start = end;
+    }
+    chunks.join(" ")
+}
+
+fn trailing_backslashes(bytes: &[u8]) -> usize {
+    bytes
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'\\')
+        .count()
 }
 
 #[cfg(test)]
@@ -484,6 +515,34 @@ mod tests {
     fn txt_values_are_quoted_for_route53() {
         assert_eq!(quote_txt_value("proof-token"), r#""proof-token""#);
         assert_eq!(quote_txt_value(r#"a\b"c"#), r#""a\\b\"c""#);
+    }
+
+    #[test]
+    fn long_txt_values_are_split_into_255_byte_strings() {
+        let long = "a".repeat(600);
+        let quoted = quote_txt_value(&long);
+        let parts: Vec<&str> = quoted.split(' ').collect();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0].len(), 257);
+        assert_eq!(parts[2], format!("\"{}\"", "a".repeat(90)));
+        assert_eq!(quoted.replace(['"', ' '], ""), long);
+    }
+
+    #[test]
+    fn txt_split_never_strands_an_escape_or_splits_a_char() {
+        let mut value = "x".repeat(254);
+        value.push('"');
+        value.push_str(&"y".repeat(10));
+        let quoted = quote_txt_value(&value);
+        for part in quoted.split(' ') {
+            let inner = &part[1..part.len() - 1];
+            assert!(inner.len() <= 255);
+            assert_eq!(trailing_backslashes(inner.as_bytes()) % 2, 0, "{part}");
+        }
+        let multibyte = "é".repeat(200);
+        for part in quote_txt_value(&multibyte).split(' ') {
+            assert!(part.len() - 2 <= 255);
+        }
     }
 
     #[test]
