@@ -148,7 +148,8 @@ mod tests {
     }
 
     #[test]
-    fn signs_a_fixed_request_deterministically() {
+    fn matches_the_aws_published_sigv4_example() {
+        // "Signature Version 4 signing process: examples" (IAM ListUsers GET).
         let credentials = Credentials::new(
             "AKIDEXAMPLE".into(),
             "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY".into(),
@@ -164,26 +165,29 @@ mod tests {
             ("host".into(), "iam.amazonaws.com".into()),
             ("x-amz-date".into(), "20150830T123600Z".into()),
         ]);
+        let query = vec![
+            ("Action".into(), "ListUsers".into()),
+            ("Version".into(), "2010-05-08".into()),
+        ];
         let signature = sign(
             &credentials,
             timestamp,
-            "POST",
+            "GET",
             "iam",
             "us-east-1",
             "/",
-            &[],
-            b"Action=ListUsers&Version=2010-05-08",
+            &query,
+            b"",
             &headers,
         )
         .unwrap();
         assert_eq!(signature.amz_date, "20150830T123600Z");
         assert_eq!(signature.signed_headers, "content-type;host;x-amz-date");
-        assert!(signature.authorization.starts_with(
-            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/iam/aws4_request"
-        ));
         assert_eq!(
-            signature.authorization.rsplit('=').next().unwrap().len(),
-            64
+            signature.authorization,
+            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/iam/aws4_request, \
+             SignedHeaders=content-type;host;x-amz-date, \
+             Signature=5d672d79c15b13162d9279b0855cfba6789a8edb4c82c400e06b5924a6f2b5d7"
         );
     }
 }
