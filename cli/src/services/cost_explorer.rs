@@ -33,7 +33,8 @@ struct GroupBy {
 pub struct Response {
     #[serde(default)]
     pub results_by_time: Vec<ResultByTime>,
-    next_page_token: Option<String>,
+    #[serde(skip_serializing)]
+    pub next_page_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

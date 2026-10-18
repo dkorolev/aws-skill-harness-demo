@@ -92,9 +92,9 @@ enum Command {
         /// Unquoted TXT value; repeat for a multi-value record set.
         #[arg(long, value_name = "TEXT")]
         value: Vec<String>,
-        /// TXT record TTL in seconds.
-        #[arg(long, default_value_t = 60)]
-        ttl: u64,
+        /// TXT record TTL in seconds (default 60).
+        #[arg(long, value_name = "SECONDS")]
+        ttl: Option<u64>,
         #[arg(long, default_value = "")]
         comment: String,
     },
@@ -145,6 +145,8 @@ struct Inventory {
     hosted_zones: Vec<services::route53::HostedZone>,
 }
 
+const DEFAULT_TXT_TTL: u64 = 60;
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("awsw: {error}");
@@ -178,7 +180,19 @@ fn run() -> Result<()> {
         .or_else(|| env::var("AWS_DEFAULT_REGION").ok())
         .unwrap_or_else(|| "us-east-1".into());
     let client = AwsClient::new(EnvironmentProvider::default().provide()?)?;
-    let scan_regions = resolve_regions(&client, &default_region, cli.region.as_deref())?;
+    // Resolved on first use so global commands (whoami, iam, s3, r53, billing)
+    // neither pay for nor need permission to call ec2:DescribeRegions.
+    let mut resolved_regions: Option<Vec<String>> = None;
+    let mut scan_regions = || -> Result<Vec<String>> {
+        if resolved_regions.is_none() {
+            resolved_regions = Some(resolve_regions(
+                &client,
+                &default_region,
+                cli.region.as_deref(),
+            )?);
+        }
+        Ok(resolved_regions.clone().expect("regions resolved above"))
+    };
 
     match command {
         Command::Advertise => unreachable!("handled before credential lookup"),
@@ -200,70 +214,74 @@ fn run() -> Result<()> {
         }
         Command::Iam => render_iam(services::iam::audit(&client)?, cli.json)?,
         Command::Ec2 => render_instances(
-            regional(&client, &scan_regions, services::ec2::describe_instances),
+            regional(&client, &scan_regions()?, services::ec2::describe_instances),
             cli.json,
         )?,
         Command::Sgs => render_sgs(
             regional(
                 &client,
-                &scan_regions,
+                &scan_regions()?,
                 services::ec2::describe_security_groups,
             ),
             cli.json,
         )?,
         Command::Volumes => render_volumes(
-            regional(&client, &scan_regions, services::ec2::describe_volumes),
+            regional(&client, &scan_regions()?, services::ec2::describe_volumes),
             cli.json,
         )?,
         Command::Elb => {
             let inventory = ElbInventory {
                 load_balancers: regional(
                     &client,
-                    &scan_regions,
+                    &scan_regions()?,
                     services::elb::describe_load_balancers,
                 ),
                 target_groups: regional(
                     &client,
-                    &scan_regions,
+                    &scan_regions()?,
                     services::elb::describe_target_groups,
                 ),
             };
             render_elb(inventory, cli.json)?;
         }
         Command::Certs => render_certs(
-            regional(&client, &scan_regions, services::acm::list_certificates),
+            regional(&client, &scan_regions()?, services::acm::list_certificates),
             cli.json,
         )?,
         Command::Rds => render_rds(
-            regional(&client, &scan_regions, services::rds::describe_databases),
+            regional(&client, &scan_regions()?, services::rds::describe_databases),
             cli.json,
         )?,
         Command::Ecs => render_ecs(
-            regional(&client, &scan_regions, services::ecs::list_services),
+            regional(&client, &scan_regions()?, services::ecs::list_services),
             cli.json,
         )?,
         Command::Eips => render_eips(
-            regional(&client, &scan_regions, services::ec2::describe_addresses),
+            regional(&client, &scan_regions()?, services::ec2::describe_addresses),
             cli.json,
         )?,
         Command::Snapshots => render_snapshots(
-            regional(&client, &scan_regions, services::ec2::describe_snapshots),
+            regional(&client, &scan_regions()?, services::ec2::describe_snapshots),
             cli.json,
         )?,
         Command::Amis => render_images(
-            regional(&client, &scan_regions, services::ec2::describe_images),
+            regional(&client, &scan_regions()?, services::ec2::describe_images),
             cli.json,
         )?,
         Command::Vpce => render_vpce(
             regional(
                 &client,
-                &scan_regions,
+                &scan_regions()?,
                 services::ec2::describe_vpc_endpoints,
             ),
             cli.json,
         )?,
         Command::Ses => render_ses(
-            regional(&client, &scan_regions, services::ses::list_email_identities),
+            regional(
+                &client,
+                &scan_regions()?,
+                services::ses::list_email_identities,
+            ),
             cli.json,
         )?,
         Command::S3 => render_s3(services::s3::list_buckets(&client)?, cli.json)?,
@@ -333,7 +351,7 @@ fn run() -> Result<()> {
                         zone_id.as_deref().expect("validated Route 53 zone ID"),
                         action,
                         &name,
-                        ttl,
+                        ttl.unwrap_or(DEFAULT_TXT_TTL),
                         &value,
                         &comment,
                     )?;
@@ -354,7 +372,7 @@ fn run() -> Result<()> {
             render_billing(services::cost_explorer::month_to_date(&client)?, cli.json)?
         }
         Command::Discover => {
-            let inventory = discover(&client, &default_region, &scan_regions);
+            let inventory = discover(&client, &default_region, &scan_regions()?);
             if cli.json {
                 print_json(&inventory)?;
             } else {
@@ -448,10 +466,10 @@ fn validate_cli(cli: &Cli) -> Result<()> {
                     "at least one --value is required with --upsert-txt or --delete-txt".into(),
                 ));
             }
-            if *ttl == 0 {
+            if *ttl == Some(0) {
                 return Err(Error::InvalidRequest("--ttl must be positive".into()));
             }
-        } else if zone_id.is_some() || !value.is_empty() || *ttl != 60 {
+        } else if zone_id.is_some() || !value.is_empty() || ttl.is_some() {
             return Err(Error::InvalidRequest(
                 "--zone-id, --value, and --ttl require --upsert-txt or --delete-txt".into(),
             ));
@@ -1054,6 +1072,14 @@ fn render_billing(v: services::cost_explorer::CostReport, json: bool) -> Result<
     Ok(())
 }
 fn billing_table(title: &str, v: &services::cost_explorer::Response) {
+    let (rows, total) = billing_rows(v);
+    println!("\n  {title}:");
+    table(&["DIMENSION", "USD"], rows_with_total(rows, total));
+}
+
+/// Returns (dimension, amount) pairs sorted by amount descending, plus the
+/// total over every group including those too small to list.
+fn billing_rows(v: &services::cost_explorer::Response) -> (Vec<(String, f64)>, f64) {
     let mut rows = Vec::new();
     let mut total = 0.0;
     for time in &v.results_by_time {
@@ -1066,17 +1092,19 @@ fn billing_table(title: &str, v: &services::cost_explorer::Response) {
                 .unwrap_or(0.0);
             total += amount;
             if amount.abs() >= 0.005 {
-                rows.push(vec![
-                    group.keys.first().cloned().unwrap_or_default(),
-                    format!("{amount:.2}"),
-                ]);
+                rows.push((group.keys.first().cloned().unwrap_or_default(), amount));
             }
         }
     }
-    rows.sort_by(|a, b| b[1].partial_cmp(&a[1]).unwrap_or(std::cmp::Ordering::Equal));
-    rows.push(vec!["TOTAL".into(), format!("{total:.2}")]);
-    println!("\n  {title}:");
-    table(&["DIMENSION", "USD"], rows);
+    rows.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    (rows, total)
+}
+
+fn rows_with_total(rows: Vec<(String, f64)>, total: f64) -> Vec<Vec<String>> {
+    rows.into_iter()
+        .map(|(key, amount)| vec![key, format!("{amount:.2}")])
+        .chain(std::iter::once(vec!["TOTAL".into(), format!("{total:.2}")]))
+        .collect()
 }
 
 fn render_discover(v: Inventory) -> Result<()> {
@@ -1157,10 +1185,10 @@ fn table(headers: &[&str], rows: Vec<Vec<String>>) {
         .enumerate()
         .map(|(i, h)| {
             rows.iter()
-                .map(|r| r[i].len())
+                .map(|r| r[i].chars().count())
                 .max()
                 .unwrap_or(0)
-                .max(h.len())
+                .max(h.chars().count())
         })
         .collect::<Vec<_>>();
     println!(
@@ -1189,5 +1217,58 @@ fn table(headers: &[&str], rows: Vec<Vec<String>>) {
                 .collect::<Vec<_>>()
                 .join("  ")
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use services::cost_explorer::{Amount, Group, Metrics, Response, ResultByTime};
+
+    fn group(key: &str, amount: &str) -> Group {
+        Group {
+            keys: vec![key.into()],
+            metrics: Metrics {
+                unblended_cost: Amount {
+                    amount: amount.into(),
+                    unit: "USD".into(),
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn billing_rows_sort_numerically_not_lexically() {
+        let response = Response {
+            results_by_time: vec![ResultByTime {
+                groups: vec![
+                    group("EC2", "9.50"),
+                    group("S3", "100.00"),
+                    group("Route 53", "12.00"),
+                    group("Tax", "0.001"),
+                ],
+            }],
+            next_page_token: None,
+        };
+        let (rows, total) = billing_rows(&response);
+        let order: Vec<&str> = rows.iter().map(|(key, _)| key.as_str()).collect();
+        assert_eq!(order, ["S3", "Route 53", "EC2"]);
+        assert!((total - 121.501).abs() < 1e-9);
+        let rendered = rows_with_total(rows, total);
+        assert_eq!(
+            rendered.last().unwrap(),
+            &vec!["TOTAL".to_string(), "121.50".to_string()]
+        );
+    }
+
+    #[test]
+    fn table_widths_count_characters_not_bytes() {
+        let width = ["héllo".to_string()]
+            .iter()
+            .map(|value| value.chars().count())
+            .max()
+            .unwrap();
+        assert_eq!(width, 5);
+        assert_eq!(format!("{:<7}|", "héllo"), "héllo  |");
     }
 }

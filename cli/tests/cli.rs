@@ -145,3 +145,20 @@ fn route53_txt_change_validates_required_arguments_before_credentials() {
     assert!(stderr.contains("--zone-id is required"), "{stderr}");
     assert!(!stderr.contains("credentials unavailable"), "{stderr}");
 }
+
+#[test]
+fn route53_rejects_explicit_default_ttl_without_a_txt_change() {
+    let output = Command::new(env!("CARGO_BIN_EXE_awsw"))
+        .args(["r53", "--ttl", "60"])
+        .env_remove("AWS_ACCESS_KEY_ID")
+        .env_remove("AWS_SECRET_ACCESS_KEY")
+        .env("AWS_SHARED_CREDENTIALS_FILE", "/does/not/exist")
+        .output()
+        .expect("run awsw r53 --ttl 60");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 stderr");
+    assert!(
+        stderr.contains("require --upsert-txt or --delete-txt"),
+        "{stderr}"
+    );
+}
