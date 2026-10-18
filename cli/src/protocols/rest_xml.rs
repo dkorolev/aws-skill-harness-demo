@@ -29,6 +29,7 @@ pub fn post_xml<I: serde::Serialize, O: DeserializeOwned>(
         .into_bytes();
     let mut request = Request::post(service, region, endpoint.into(), body);
     request.path = path.into();
+    request.retryable = false;
     request
         .headers
         .insert("content-type".into(), "application/xml".into());

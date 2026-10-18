@@ -14,7 +14,7 @@ use crate::{
     sigv4,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Request {
     pub method: Method,
     pub service: String,
@@ -24,6 +24,10 @@ pub struct Request {
     pub query: Vec<(String, String)>,
     pub headers: BTreeMap<String, String>,
     pub body: Vec<u8>,
+    /// Whether a lost or throttled attempt may be re-sent. Reads are
+    /// idempotent; Route 53 writes are not (a DELETE that succeeded but whose
+    /// response was lost would fail on replay), so writers set this to false.
+    pub retryable: bool,
 }
 
 impl Request {
@@ -37,6 +41,7 @@ impl Request {
             query: Vec::new(),
             headers: BTreeMap::new(),
             body,
+            retryable: true,
         }
     }
 
@@ -50,7 +55,38 @@ impl Request {
             query: Vec::new(),
             headers: BTreeMap::new(),
             body: Vec::new(),
+            retryable: true,
         }
+    }
+}
+
+impl std::fmt::Debug for Request {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let headers = self
+            .headers
+            .keys()
+            .map(|name| {
+                if name.eq_ignore_ascii_case("authorization")
+                    || name.eq_ignore_ascii_case("x-amz-security-token")
+                {
+                    (name.as_str(), "[redacted]")
+                } else {
+                    (name.as_str(), self.headers[name].as_str())
+                }
+            })
+            .collect::<BTreeMap<_, _>>();
+        formatter
+            .debug_struct("Request")
+            .field("method", &self.method)
+            .field("service", &self.service)
+            .field("region", &self.region)
+            .field("host", &self.host)
+            .field("path", &self.path)
+            .field("query", &self.query)
+            .field("headers", &headers)
+            .field("body_len", &self.body.len())
+            .field("retryable", &self.retryable)
+            .finish()
     }
 }
 
@@ -64,6 +100,7 @@ impl AwsClient {
         let http = Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(120))
             .user_agent(concat!("awsw/", env!("CARGO_PKG_VERSION")))
             .build()?;
@@ -123,8 +160,8 @@ impl AwsClient {
                     .map_err(|error| Error::InvalidRequest(error.to_string()))?,
             );
         }
-        const ATTEMPTS: usize = 3;
-        for attempt in 0..ATTEMPTS {
+        let attempts = if request.retryable { ATTEMPTS } else { 1 };
+        for attempt in 0..attempts {
             let result = self
                 .http
                 .request(request.method.clone(), &url)
@@ -133,8 +170,8 @@ impl AwsClient {
                 .send();
             let response = match result {
                 Ok(response) => response,
-                Err(_error) if attempt + 1 < ATTEMPTS => {
-                    thread::sleep(Duration::from_millis(150 * (1 << attempt)));
+                Err(_error) if attempt + 1 < attempts => {
+                    thread::sleep(backoff(attempt));
                     continue;
                 }
                 Err(error) => return Err(error.into()),
@@ -150,13 +187,54 @@ impl AwsClient {
             if status.is_success() {
                 return Ok(body);
             }
-            if matches!(status.as_u16(), 429 | 500 | 502 | 503 | 504) && attempt + 1 < ATTEMPTS {
-                thread::sleep(Duration::from_millis(150 * (1 << attempt)));
+            let error = parse_error(status.as_u16(), request_id, &body);
+            if attempt + 1 < attempts && is_retryable(&error) {
+                thread::sleep(backoff(attempt));
                 continue;
             }
-            return Err(parse_error(status.as_u16(), request_id, &body));
+            return Err(error);
         }
         Err(Error::InvalidRequest("request retry loop exhausted".into()))
+    }
+}
+
+const ATTEMPTS: usize = 5;
+
+/// Exponential backoff with full jitter: 200 ms, 400 ms, 800 ms, 1.6 s caps.
+fn backoff(attempt: usize) -> Duration {
+    let cap_ms = 200u64 << attempt.min(4);
+    let nanos = u64::from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0),
+    );
+    Duration::from_millis(nanos % (cap_ms + 1))
+}
+
+/// AWS signals throttling inconsistently: EC2 uses 503 RequestLimitExceeded,
+/// IAM/STS use HTTP 400 Throttling, JSON services use 400 ThrottlingException.
+/// Status alone is therefore not enough; the parsed code must be consulted.
+fn is_retryable(error: &Error) -> bool {
+    match error {
+        Error::Aws { status, code, .. } => {
+            matches!(status, 429 | 500 | 502 | 503 | 504)
+                || matches!(
+                    code.as_str(),
+                    "Throttling"
+                        | "ThrottlingException"
+                        | "ThrottledException"
+                        | "RequestThrottled"
+                        | "RequestThrottledException"
+                        | "RequestLimitExceeded"
+                        | "TooManyRequestsException"
+                        | "ProvisionedThroughputExceededException"
+                        | "LimitExceededException"
+                        | "SlowDown"
+                        | "PriorRequestNotComplete"
+                )
+        }
+        _ => false,
     }
 }
 
@@ -250,6 +328,35 @@ mod tests {
         let body = br#"<Error><Code>NoSuchBucket</Code><Message>gone</Message><RequestId>req-2</RequestId></Error>"#;
         let error = parse_error(404, None, body).to_string();
         assert_eq!(error, "AWS 404 NoSuchBucket: gone (request req-2)");
+    }
+
+    #[test]
+    fn iam_throttling_at_http_400_is_retryable() {
+        let body = br#"<ErrorResponse><Error><Type>Sender</Type><Code>Throttling</Code><Message>Rate exceeded</Message></Error><RequestId>req-4</RequestId></ErrorResponse>"#;
+        assert!(is_retryable(&parse_error(400, None, body)));
+        let json = br#"{"__type":"ThrottlingException","message":"Rate exceeded"}"#;
+        assert!(is_retryable(&parse_error(400, None, json)));
+        let denied = br#"<ErrorResponse><Error><Code>AccessDenied</Code><Message>no</Message></Error></ErrorResponse>"#;
+        assert!(!is_retryable(&parse_error(403, None, denied)));
+        assert!(is_retryable(&parse_error(503, None, b"")));
+    }
+
+    #[test]
+    fn request_debug_redacts_signing_material() {
+        let mut request = Request::get("s3", "us-east-1", "s3.amazonaws.com".into(), "/".into());
+        request
+            .headers
+            .insert("authorization".into(), "AWS4-HMAC-SHA256 secret".into());
+        request
+            .headers
+            .insert("x-amz-security-token".into(), "TOKEN123".into());
+        request
+            .headers
+            .insert("x-amz-date".into(), "20260101T000000Z".into());
+        let debug = format!("{request:?}");
+        assert!(!debug.contains("secret"), "{debug}");
+        assert!(!debug.contains("TOKEN123"), "{debug}");
+        assert!(debug.contains("20260101T000000Z"), "{debug}");
     }
 
     #[test]
