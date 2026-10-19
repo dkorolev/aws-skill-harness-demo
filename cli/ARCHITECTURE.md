@@ -148,6 +148,16 @@ Regional list operations run in parallel. The result order follows the input reg
 
 This behavior is appropriate for discovery, but callers requiring proof of completeness must treat any stderr error as an incomplete report.
 
+### Parallelism policy (decision, 2026-10-19)
+
+Parallelism is allowed only across AWS "universes": units that share no API endpoint, no throttling bucket, and no ordering relationship. Today that means regions. Everything inside one universe runs sequentially, by design:
+
+- the per-service loops within a region (pagination, ELB target health per target group, ECS services per cluster);
+- the global services (IAM per-user calls, S3 bucket locations, Route 53 record pages per zone);
+- the service-by-service order inside `discover`.
+
+Rationale: each AWS endpoint enforces its own request-rate bucket, and firing many calls at one endpoint concurrently only converts a fast sequential sweep into a throttled one with retries. Sequential calls also keep output order deterministic and make a partial failure attributable to one call. Fanning out IAM, S3, or Route 53 calls, or running the `discover` services concurrently against the same regional endpoints, is a rejected proposal, not an open item. Revisit only if a universe boundary other than region appears (for example, separate partitions or accounts).
+
 ## Write-operation containment
 
 Route 53 zone creation and explicit TXT UPSERT/DELETE operations are the only writes. They are not part of `discover` and are not exercised in live tests. Zone creation has no alias shorter than `r53 --create DOMAIN`; its caller reference contains the normalized domain and current epoch milliseconds to make retries distinguishable. TXT changes require a hosted-zone ID, record name, and value set. AWS remains the idempotency and conflict authority.
