@@ -24,6 +24,8 @@ struct Cli {
     command: Option<Command>,
 }
 
+// Parsed once per process; boxing the r53 variant would only add noise.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Start here: learn what awsw does and which environment variables it reads.
@@ -64,35 +66,54 @@ enum Command {
     S3,
     /// Inventory CloudFront distributions.
     Cloudfront,
-    /// Inventory Route 53, create a public zone, or change a TXT record.
+    /// Inventory Route 53, create a public zone, or change an A, AAAA, CNAME, or TXT record.
     R53 {
         #[arg(
             long,
             value_name = "DOMAIN",
-            conflicts_with_all = ["upsert_txt", "delete_txt"]
+            conflicts_with_all = ["upsert", "delete", "upsert_txt", "delete_txt"]
         )]
         create: Option<String>,
-        /// Create or replace a TXT record set.
+        /// Create or replace a record set of --type (A, AAAA, CNAME, or TXT).
         #[arg(
             long,
             value_name = "NAME",
-            conflicts_with_all = ["create", "delete_txt"]
+            requires = "record_type",
+            conflicts_with_all = ["create", "delete", "upsert_txt", "delete_txt"]
+        )]
+        upsert: Option<String>,
+        /// Delete an exact record set of --type (the TTL and all values must match).
+        #[arg(
+            long,
+            value_name = "NAME",
+            requires = "record_type",
+            conflicts_with_all = ["create", "upsert", "upsert_txt", "delete_txt"]
+        )]
+        delete: Option<String>,
+        /// Record type for --upsert or --delete: A, AAAA, CNAME, or TXT.
+        #[arg(long = "type", value_name = "TYPE")]
+        record_type: Option<services::route53::RecordType>,
+        /// Shorthand for --upsert NAME --type TXT.
+        #[arg(
+            long,
+            value_name = "NAME",
+            conflicts_with_all = ["create", "upsert", "delete", "delete_txt", "record_type"]
         )]
         upsert_txt: Option<String>,
-        /// Delete an exact TXT record set (the TTL and all values must match).
+        /// Shorthand for --delete NAME --type TXT.
         #[arg(
             long,
             value_name = "NAME",
-            conflicts_with_all = ["create", "upsert_txt"]
+            conflicts_with_all = ["create", "upsert", "delete", "upsert_txt", "record_type"]
         )]
         delete_txt: Option<String>,
-        /// Route 53 hosted-zone ID containing the TXT record.
+        /// Hosted-zone ID; when omitted, the public zone containing NAME is looked up.
         #[arg(long, value_name = "ID")]
         zone_id: Option<String>,
-        /// Unquoted TXT value; repeat for a multi-value record set.
-        #[arg(long, value_name = "TEXT")]
+        /// Record value (IPv4, IPv6, hostname, or unquoted text); repeat for several.
+        #[arg(long, value_name = "VALUE")]
         value: Vec<String>,
-        /// TXT record TTL in seconds (default 60).
+        /// Record TTL in seconds (default 60 for TXT, 300 otherwise).
         #[arg(long, value_name = "SECONDS")]
         ttl: Option<u64>,
         #[arg(long, default_value = "")]
@@ -144,8 +165,6 @@ struct Inventory {
     distributions: Vec<services::cloudfront::Distribution>,
     hosted_zones: Vec<services::route53::HostedZone>,
 }
-
-const DEFAULT_TXT_TTL: u64 = 60;
 
 fn main() {
     if let Err(error) = run() {
@@ -290,6 +309,9 @@ fn run() -> Result<()> {
         }
         Command::R53 {
             create,
+            upsert,
+            delete,
+            record_type,
             upsert_txt,
             delete_txt,
             zone_id,
@@ -339,27 +361,35 @@ fn run() -> Result<()> {
                     }
                 }
             } else {
-                let is_upsert = upsert_txt.is_some();
-                if let Some(name) = upsert_txt.or(delete_txt) {
-                    let action = if is_upsert {
-                        services::route53::RecordChangeAction::Upsert
-                    } else {
-                        services::route53::RecordChangeAction::Delete
+                if let Some((action, record_type, name)) =
+                    record_change(upsert, delete, record_type, upsert_txt, delete_txt)
+                {
+                    let zone_id = match zone_id {
+                        Some(id) => id,
+                        None => services::route53::find_zone_id(&client, &name)?,
                     };
-                    let response = services::route53::change_txt_record(
+                    let response = services::route53::change_record(
                         &client,
-                        zone_id.as_deref().expect("validated Route 53 zone ID"),
+                        &zone_id,
                         action,
+                        record_type,
                         &name,
-                        ttl.unwrap_or(DEFAULT_TXT_TTL),
+                        ttl.unwrap_or(record_type.default_ttl()),
                         &value,
                         &comment,
                     )?;
                     if cli.json {
                         print_json(&response)?;
                     } else {
-                        let action = if is_upsert { "UPSERT" } else { "DELETE" };
-                        section(&format!("Route53 TXT {action} submitted"));
+                        let action = match action {
+                            services::route53::RecordChangeAction::Upsert => "UPSERT",
+                            services::route53::RecordChangeAction::Delete => "DELETE",
+                        };
+                        section(&format!(
+                            "Route53 {} {action} submitted",
+                            record_type.as_str()
+                        ));
+                        println!("  Zone     : {zone_id}");
                         println!("  ChangeId : {}", response.change_info.id);
                         println!("  Status   : {}", response.change_info.status);
                     }
@@ -384,7 +414,7 @@ fn run() -> Result<()> {
 }
 
 fn render_advertisement(json: bool) -> Result<()> {
-    const PURPOSE: &str = "awsw inventories AWS identity, regions, IAM, compute, storage, networking, DNS, certificates, email, and month-to-date costs. Inventory commands are read-only; only r53 --create, r53 --upsert-txt, and r53 --delete-txt change AWS resources.";
+    const PURPOSE: &str = "awsw inventories AWS identity, regions, IAM, compute, storage, networking, DNS, certificates, email, and month-to-date costs. Inventory commands are read-only; only r53 --create, r53 --upsert, r53 --delete, and their --upsert-txt / --delete-txt shorthands change AWS resources.";
     const ENVIRONMENT: [(&str, &str); 8] = [
         (
             "AWS_ACCESS_KEY_ID",
@@ -445,8 +475,33 @@ fn render_advertisement(json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Collapse the generic and TXT-shorthand flags into one record change.
+fn record_change(
+    upsert: Option<String>,
+    delete: Option<String>,
+    record_type: Option<services::route53::RecordType>,
+    upsert_txt: Option<String>,
+    delete_txt: Option<String>,
+) -> Option<(
+    services::route53::RecordChangeAction,
+    services::route53::RecordType,
+    String,
+)> {
+    use services::route53::{RecordChangeAction as Action, RecordType};
+    match (upsert, delete, upsert_txt, delete_txt) {
+        (Some(name), ..) => Some((Action::Upsert, record_type?, name)),
+        (_, Some(name), ..) => Some((Action::Delete, record_type?, name)),
+        (_, _, Some(name), _) => Some((Action::Upsert, RecordType::Txt, name)),
+        (_, _, _, Some(name)) => Some((Action::Delete, RecordType::Txt, name)),
+        _ => None,
+    }
+}
+
 fn validate_cli(cli: &Cli) -> Result<()> {
     if let Some(Command::R53 {
+        upsert,
+        delete,
+        record_type,
         upsert_txt,
         delete_txt,
         zone_id,
@@ -455,23 +510,29 @@ fn validate_cli(cli: &Cli) -> Result<()> {
         ..
     }) = &cli.command
     {
-        if upsert_txt.is_some() || delete_txt.is_some() {
-            if zone_id.as_deref().is_none_or(str::is_empty) {
-                return Err(Error::InvalidRequest(
-                    "--zone-id is required with --upsert-txt or --delete-txt".into(),
-                ));
+        let change = record_change(
+            upsert.clone(),
+            delete.clone(),
+            *record_type,
+            upsert_txt.clone(),
+            delete_txt.clone(),
+        );
+        if let Some((_, record_type, _)) = change {
+            if zone_id.as_deref() == Some("") {
+                return Err(Error::InvalidRequest("--zone-id cannot be empty".into()));
             }
             if value.is_empty() {
                 return Err(Error::InvalidRequest(
-                    "at least one --value is required with --upsert-txt or --delete-txt".into(),
+                    "at least one --value is required with --upsert, --delete, --upsert-txt, or --delete-txt".into(),
                 ));
             }
             if *ttl == Some(0) {
                 return Err(Error::InvalidRequest("--ttl must be positive".into()));
             }
-        } else if zone_id.is_some() || !value.is_empty() || ttl.is_some() {
+            services::route53::encode_record_values(record_type, value)?;
+        } else if record_type.is_some() || zone_id.is_some() || !value.is_empty() || ttl.is_some() {
             return Err(Error::InvalidRequest(
-                "--zone-id, --value, and --ttl require --upsert-txt or --delete-txt".into(),
+                "--type, --zone-id, --value, and --ttl require --upsert, --delete, --upsert-txt, or --delete-txt".into(),
             ));
         }
     }

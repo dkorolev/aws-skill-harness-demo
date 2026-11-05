@@ -84,8 +84,20 @@ All inventory commands are read-only. Route 53 writes are exposed through explic
 | `billing` | Cost Explorer | global/us-east-1 | month-to-date service and region cost |
 | `discover` | all APIs above | account-wide | one complete inventory |
 | `r53 --create DOMAIN` | Route 53 | global, **write** | new public zone and delegation set |
-| `r53 --upsert-txt NAME` | Route 53 | global, **write** | create or replace a TXT record set |
-| `r53 --delete-txt NAME` | Route 53 | global, **write** | delete an exact TXT record set |
+| `r53 --upsert NAME --type T` | Route 53 | global, **write** | create or replace an A, AAAA, CNAME, or TXT record set |
+| `r53 --delete NAME --type T` | Route 53 | global, **write** | delete an exact A, AAAA, CNAME, or TXT record set |
+| `r53 --upsert-txt NAME` | Route 53 | global, **write** | shorthand for `--upsert NAME --type TXT` |
+| `r53 --delete-txt NAME` | Route 53 | global, **write** | shorthand for `--delete NAME --type TXT` |
+
+To point a hostname at a machine, upsert an A (or AAAA) record. Without `--zone-id`, `awsw` picks the public hosted zone with the longest name that contains NAME, and refuses to guess if two public zones share that name. Values are validated before any request is signed: A takes IPv4 addresses, AAAA takes IPv6 addresses, CNAME takes exactly one hostname. The TTL defaults to 300 seconds (60 for TXT):
+
+```sh
+./awsw r53 --upsert ctl.example.com --type A --value 192.0.2.10
+./awsw r53 --upsert www.example.com --type CNAME --value ctl.example.com
+./awsw r53 --delete www.example.com --type CNAME --value ctl.example.com --ttl 300
+```
+
+Alias records and routing policies (weighted, latency, failover) are not supported.
 
 For a Let's Encrypt DNS-01 challenge, pass the TXT value without DNS quotes; the client adds the quotes Route 53 requires and safely serializes the request:
 
@@ -98,7 +110,7 @@ For a Let's Encrypt DNS-01 challenge, pass the TXT value without DNS quotes; the
   --zone-id Z1234567890 --value challenge-token --ttl 60
 ```
 
-Repeat `--value` for a multi-value TXT record set. Route 53 requires a DELETE to specify the record's exact current TTL and complete value set. Both commands return the Route 53 change ID and initial status; certificate tooling must still wait for DNS propagation before asking the ACME server to validate the proof.
+Repeat `--value` for a multi-value A, AAAA, or TXT record set. Route 53 requires a DELETE to specify the record's exact current TTL and complete value set. Both commands return the Route 53 change ID and initial status; certificate tooling must still wait for DNS propagation before asking the ACME server to validate the proof.
 
 Use `--region REGION` before or after a subcommand to restrict regional scans:
 

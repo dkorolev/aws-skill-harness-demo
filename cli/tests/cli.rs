@@ -113,7 +113,7 @@ fn version_works_without_aws_credentials() {
 }
 
 #[test]
-fn route53_help_exposes_txt_record_changes() {
+fn route53_help_exposes_record_changes() {
     let output = Command::new(env!("CARGO_BIN_EXE_awsw"))
         .args(["r53", "--help"])
         .output()
@@ -121,6 +121,9 @@ fn route53_help_exposes_txt_record_changes() {
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).expect("UTF-8 help");
     for option in [
+        "--upsert",
+        "--delete",
+        "--type",
         "--upsert-txt",
         "--delete-txt",
         "--zone-id",
@@ -131,34 +134,145 @@ fn route53_help_exposes_txt_record_changes() {
     }
 }
 
-#[test]
-fn route53_txt_change_validates_required_arguments_before_credentials() {
+/// Run `awsw` with no usable credentials, so any failure must come from
+/// argument validation rather than from AWS.
+fn awsw_without_credentials(args: &[&str]) -> (bool, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_awsw"))
-        .args(["r53", "--upsert-txt", "_acme-challenge.example.com"])
+        .args(args)
         .env_remove("AWS_ACCESS_KEY_ID")
         .env_remove("AWS_SECRET_ACCESS_KEY")
+        .env_remove("AWS_SESSION_TOKEN")
+        .env_remove("AWS_PROFILE")
         .env("AWS_SHARED_CREDENTIALS_FILE", "/does/not/exist")
         .output()
-        .expect("run invalid Route 53 change");
-    assert!(!output.status.success());
-    let stderr = String::from_utf8(output.stderr).expect("UTF-8 stderr");
-    assert!(stderr.contains("--zone-id is required"), "{stderr}");
+        .expect("run awsw");
+    (
+        output.status.success(),
+        String::from_utf8(output.stderr).expect("UTF-8 stderr"),
+    )
+}
+
+#[test]
+fn route53_txt_change_validates_required_arguments_before_credentials() {
+    let (ok, stderr) =
+        awsw_without_credentials(&["r53", "--upsert-txt", "_acme-challenge.example.com"]);
+    assert!(!ok);
+    assert!(
+        stderr.contains("at least one --value is required"),
+        "{stderr}"
+    );
     assert!(!stderr.contains("credentials unavailable"), "{stderr}");
 }
 
 #[test]
-fn route53_rejects_explicit_default_ttl_without_a_txt_change() {
-    let output = Command::new(env!("CARGO_BIN_EXE_awsw"))
-        .args(["r53", "--ttl", "60"])
-        .env_remove("AWS_ACCESS_KEY_ID")
-        .env_remove("AWS_SECRET_ACCESS_KEY")
-        .env("AWS_SHARED_CREDENTIALS_FILE", "/does/not/exist")
-        .output()
-        .expect("run awsw r53 --ttl 60");
-    assert!(!output.status.success());
-    let stderr = String::from_utf8(output.stderr).expect("UTF-8 stderr");
-    assert!(
-        stderr.contains("require --upsert-txt or --delete-txt"),
-        "{stderr}"
-    );
+fn route53_rejects_explicit_default_ttl_without_a_record_change() {
+    let (ok, stderr) = awsw_without_credentials(&["r53", "--ttl", "60"]);
+    assert!(!ok);
+    assert!(stderr.contains("require --upsert, --delete"), "{stderr}");
+}
+
+#[test]
+fn route53_generic_change_requires_a_type() {
+    let (ok, stderr) = awsw_without_credentials(&[
+        "r53",
+        "--upsert",
+        "ctl.example.com",
+        "--value",
+        "192.0.2.10",
+    ]);
+    assert!(!ok);
+    assert!(stderr.contains("--type"), "{stderr}");
+}
+
+#[test]
+fn route53_rejects_unsupported_types_and_bad_values_before_credentials() {
+    for (args, expected) in [
+        (
+            vec![
+                "r53",
+                "--upsert",
+                "x.example.com",
+                "--type",
+                "MX",
+                "--value",
+                "1 mx",
+            ],
+            "unsupported record type",
+        ),
+        (
+            vec![
+                "r53",
+                "--upsert",
+                "x.example.com",
+                "--type",
+                "A",
+                "--value",
+                "2001:db8::1",
+            ],
+            "not a valid IPv4 address",
+        ),
+        (
+            vec![
+                "r53",
+                "--upsert",
+                "x.example.com",
+                "--type",
+                "AAAA",
+                "--value",
+                "192.0.2.1",
+            ],
+            "not a valid IPv6 address",
+        ),
+        (
+            vec![
+                "r53",
+                "--upsert",
+                "x.example.com",
+                "--type",
+                "CNAME",
+                "--value",
+                "a.com",
+                "--value",
+                "b.com",
+            ],
+            "exactly one --value",
+        ),
+    ] {
+        let (ok, stderr) = awsw_without_credentials(&args);
+        assert!(!ok, "{args:?}");
+        assert!(stderr.contains(expected), "{args:?}: {stderr}");
+        assert!(!stderr.contains("credentials unavailable"), "{stderr}");
+    }
+}
+
+#[test]
+fn route53_txt_shorthand_cannot_be_combined_with_type() {
+    let (ok, stderr) = awsw_without_credentials(&[
+        "r53",
+        "--upsert-txt",
+        "x.example.com",
+        "--type",
+        "A",
+        "--value",
+        "v",
+    ]);
+    assert!(!ok);
+    assert!(stderr.contains("cannot be used with"), "{stderr}");
+}
+
+#[test]
+fn route53_valid_change_gets_past_validation_to_credentials() {
+    let (ok, stderr) = awsw_without_credentials(&[
+        "r53",
+        "--upsert",
+        "ctl.example.com",
+        "--type",
+        "a",
+        "--value",
+        "192.0.2.10",
+        "--zone-id",
+        "Z1234567890",
+    ]);
+    assert!(!ok);
+    assert!(stderr.contains("credentials unavailable"), "{stderr}");
 }

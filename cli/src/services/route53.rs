@@ -238,7 +238,7 @@ struct ChangeResourceRecord {
     value: String,
 }
 
-pub fn list_hosted_zones(client: &AwsClient) -> Result<Vec<HostedZone>> {
+fn list_zone_summaries(client: &AwsClient) -> Result<Vec<HostedZoneXml>> {
     let mut marker: Option<String> = None;
     let mut zones = Vec::new();
     loop {
@@ -260,8 +260,12 @@ pub fn list_hosted_zones(client: &AwsClient) -> Result<Vec<HostedZone>> {
             break;
         }
     }
+    Ok(zones)
+}
+
+pub fn list_hosted_zones(client: &AwsClient) -> Result<Vec<HostedZone>> {
     let mut output = Vec::new();
-    for zone in zones {
+    for zone in list_zone_summaries(client)? {
         let id = zone.id.rsplit('/').next().unwrap_or(&zone.id).to_owned();
         let mut name: Option<String> = None;
         let mut record_type: Option<String> = None;
@@ -346,10 +350,159 @@ pub fn create_hosted_zone(
     )
 }
 
-pub fn change_txt_record(
+/// Record types `awsw` can write. Alias records, routing policies, and the
+/// remaining types are deliberately out of scope: they are rarer and easier to
+/// get wrong from a command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordType {
+    A,
+    Aaaa,
+    Cname,
+    Txt,
+}
+
+impl RecordType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::A => "A",
+            Self::Aaaa => "AAAA",
+            Self::Cname => "CNAME",
+            Self::Txt => "TXT",
+        }
+    }
+
+    /// TXT records are mostly short-lived ACME proofs; everything else is a
+    /// longer-lived pointer that still has to be cheap to move.
+    pub fn default_ttl(self) -> u64 {
+        match self {
+            Self::Txt => 60,
+            _ => 300,
+        }
+    }
+}
+
+impl std::str::FromStr for RecordType {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value.to_ascii_uppercase().as_str() {
+            "A" => Ok(Self::A),
+            "AAAA" => Ok(Self::Aaaa),
+            "CNAME" => Ok(Self::Cname),
+            "TXT" => Ok(Self::Txt),
+            _ => Err(format!(
+                "unsupported record type `{value}` (expected A, AAAA, CNAME, or TXT)"
+            )),
+        }
+    }
+}
+
+/// Validate user-supplied values for `record_type` and convert them to the
+/// wire form Route 53 expects. Runs before any network call, so a malformed
+/// address never reaches AWS.
+pub fn encode_record_values(record_type: RecordType, values: &[String]) -> Result<Vec<String>> {
+    if values.is_empty() {
+        return Err(Error::InvalidRequest(format!(
+            "at least one {} record value is required",
+            record_type.as_str()
+        )));
+    }
+    let invalid = |value: &str, expected: &str| {
+        Error::InvalidRequest(format!(
+            "`{value}` is not a valid {expected} for a {} record",
+            record_type.as_str()
+        ))
+    };
+    match record_type {
+        RecordType::A => values
+            .iter()
+            .map(|value| {
+                value
+                    .parse::<std::net::Ipv4Addr>()
+                    .map(|address| address.to_string())
+                    .map_err(|_| invalid(value, "IPv4 address"))
+            })
+            .collect(),
+        RecordType::Aaaa => values
+            .iter()
+            .map(|value| {
+                value
+                    .parse::<std::net::Ipv6Addr>()
+                    .map(|address| address.to_string())
+                    .map_err(|_| invalid(value, "IPv6 address"))
+            })
+            .collect(),
+        RecordType::Cname => {
+            if values.len() != 1 {
+                return Err(Error::InvalidRequest(
+                    "a CNAME record takes exactly one --value".into(),
+                ));
+            }
+            let target = values[0].trim_end_matches('.');
+            let valid = !target.is_empty()
+                && target.split('.').all(|label| {
+                    !label.is_empty()
+                        && label.len() <= 63
+                        && label
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte))
+                });
+            if !valid {
+                return Err(invalid(&values[0], "hostname"));
+            }
+            Ok(vec![format!("{target}.")])
+        }
+        RecordType::Txt => Ok(values.iter().map(|value| quote_txt_value(value)).collect()),
+    }
+}
+
+/// Find the hosted zone that is authoritative for `name`: the public zone with
+/// the longest name that equals `name` or is a parent domain of it.
+pub fn find_zone_id(client: &AwsClient, name: &str) -> Result<String> {
+    select_zone(&list_zone_summaries(client)?, name)
+}
+
+fn select_zone(zones: &[HostedZoneXml], name: &str) -> Result<String> {
+    let name = normalize_name(name);
+    let mut best: Vec<&HostedZoneXml> = Vec::new();
+    let mut best_len = 0;
+    for zone in zones {
+        if zone.config.private_zone.unwrap_or(false) {
+            continue;
+        }
+        let zone_name = normalize_name(&zone.name);
+        let matches = name == zone_name || name.ends_with(&format!(".{zone_name}"));
+        if !matches || zone_name.len() < best_len {
+            continue;
+        }
+        if zone_name.len() > best_len {
+            best.clear();
+            best_len = zone_name.len();
+        }
+        best.push(zone);
+    }
+    match best.as_slice() {
+        [zone] => Ok(zone.id.rsplit('/').next().unwrap_or(&zone.id).to_owned()),
+        [] => Err(Error::InvalidRequest(format!(
+            "no public hosted zone in this account contains `{name}`"
+        ))),
+        _ => Err(Error::InvalidRequest(format!(
+            "several public hosted zones named `{}` exist; pass --zone-id",
+            normalize_name(&best[0].name)
+        ))),
+    }
+}
+
+fn normalize_name(name: &str) -> String {
+    name.trim_end_matches('.').to_ascii_lowercase()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn change_record(
     client: &AwsClient,
     hosted_zone_id: &str,
     action: RecordChangeAction,
+    record_type: RecordType,
     name: &str,
     ttl: u64,
     values: &[String],
@@ -364,27 +517,16 @@ pub fn change_txt_record(
         ));
     }
     if name.is_empty() {
-        return Err(Error::InvalidRequest(
-            "TXT record name cannot be empty".into(),
-        ));
+        return Err(Error::InvalidRequest("record name cannot be empty".into()));
     }
     if ttl == 0 {
-        return Err(Error::InvalidRequest(
-            "TXT record TTL must be positive".into(),
-        ));
-    }
-    if values.is_empty() {
-        return Err(Error::InvalidRequest(
-            "at least one TXT record value is required".into(),
-        ));
+        return Err(Error::InvalidRequest("record TTL must be positive".into()));
     }
 
     let resource_records = ChangeResourceRecords {
-        values: values
-            .iter()
-            .map(|value| ChangeResourceRecord {
-                value: quote_txt_value(value),
-            })
+        values: encode_record_values(record_type, values)?
+            .into_iter()
+            .map(|value| ChangeResourceRecord { value })
             .collect(),
     };
     rest_xml::post_xml(
@@ -402,7 +544,7 @@ pub fn change_txt_record(
                         action: action.as_str(),
                         resource_record_set: RecordSetChange {
                             name,
-                            r#type: "TXT",
+                            r#type: record_type.as_str(),
                             ttl,
                             resource_records,
                         },
@@ -543,6 +685,104 @@ mod tests {
         for part in quote_txt_value(&multibyte).split(' ') {
             assert!(part.len() - 2 <= 255);
         }
+    }
+
+    fn zone(id: &str, name: &str, private: bool) -> HostedZoneXml {
+        HostedZoneXml {
+            id: format!("/hostedzone/{id}"),
+            name: name.into(),
+            config: ZoneConfig {
+                private_zone: Some(private),
+                comment: None,
+            },
+        }
+    }
+
+    #[test]
+    fn record_type_parses_case_insensitively() {
+        assert_eq!("a".parse::<RecordType>(), Ok(RecordType::A));
+        assert_eq!("AAAA".parse::<RecordType>(), Ok(RecordType::Aaaa));
+        assert_eq!("Cname".parse::<RecordType>(), Ok(RecordType::Cname));
+        assert_eq!("txt".parse::<RecordType>(), Ok(RecordType::Txt));
+        assert!("MX".parse::<RecordType>().is_err());
+    }
+
+    #[test]
+    fn a_and_aaaa_values_must_be_addresses_of_the_right_family() {
+        let ok = encode_record_values(RecordType::A, &["170.75.167.194".into()]).unwrap();
+        assert_eq!(ok, vec!["170.75.167.194"]);
+        assert!(encode_record_values(RecordType::A, &["2001:db8::1".into()]).is_err());
+        assert!(encode_record_values(RecordType::A, &["example.com".into()]).is_err());
+        let v6 = encode_record_values(RecordType::Aaaa, &["2001:DB8:0::1".into()]).unwrap();
+        assert_eq!(v6, vec!["2001:db8::1"]);
+        assert!(encode_record_values(RecordType::Aaaa, &["192.0.2.1".into()]).is_err());
+        assert!(encode_record_values(RecordType::A, &[]).is_err());
+    }
+
+    #[test]
+    fn cname_takes_one_hostname_and_is_made_absolute() {
+        let target = encode_record_values(RecordType::Cname, &["host.example.com".into()]).unwrap();
+        assert_eq!(target, vec!["host.example.com."]);
+        let absolute =
+            encode_record_values(RecordType::Cname, &["host.example.com.".into()]).unwrap();
+        assert_eq!(absolute, vec!["host.example.com."]);
+        assert!(
+            encode_record_values(RecordType::Cname, &["a.com".into(), "b.com".into()]).is_err()
+        );
+        assert!(encode_record_values(RecordType::Cname, &["bad host".into()]).is_err());
+        assert!(encode_record_values(RecordType::Cname, &["a..com".into()]).is_err());
+    }
+
+    #[test]
+    fn zone_selection_prefers_the_longest_public_parent() {
+        let zones = vec![
+            zone("ZAPEX", "xmemory.ai.", false),
+            zone("ZSTG", "stg.xmemory.ai.", false),
+            zone("ZPRIV", "stg.xmemory.ai.", true),
+            zone("ZDIMA", "dima.ai.", false),
+        ];
+        assert_eq!(select_zone(&zones, "api.stg.xmemory.ai").unwrap(), "ZSTG");
+        assert_eq!(select_zone(&zones, "www.xmemory.ai.").unwrap(), "ZAPEX");
+        assert_eq!(select_zone(&zones, "CTL.Dima.AI").unwrap(), "ZDIMA");
+        assert_eq!(select_zone(&zones, "dima.ai").unwrap(), "ZDIMA");
+        assert!(select_zone(&zones, "notdima.ai").is_err());
+        assert!(select_zone(&zones, "example.com").is_err());
+    }
+
+    #[test]
+    fn zone_selection_refuses_to_guess_between_duplicate_zones() {
+        let zones = vec![zone("Z1", "dima.ai.", false), zone("Z2", "dima.ai.", false)];
+        let error = select_zone(&zones, "ctl.dima.ai").unwrap_err().to_string();
+        assert!(error.contains("--zone-id"), "{error}");
+    }
+
+    #[test]
+    fn change_a_payload_has_route53_wire_shape() {
+        let request = ChangeRecordsRequest {
+            xmlns: NAMESPACE,
+            change_batch: ChangeBatch {
+                comment: "",
+                changes: Changes {
+                    values: vec![RecordChange {
+                        action: RecordChangeAction::Upsert.as_str(),
+                        resource_record_set: RecordSetChange {
+                            name: "ctl.example.com",
+                            r#type: RecordType::A.as_str(),
+                            ttl: 300,
+                            resource_records: ChangeResourceRecords {
+                                values: vec![ChangeResourceRecord {
+                                    value: "192.0.2.10".into(),
+                                }],
+                            },
+                        },
+                    }],
+                },
+            },
+        };
+        let xml = quick_xml::se::to_string(&request).unwrap();
+        assert!(xml.contains("<Type>A</Type><TTL>300</TTL>"), "{xml}");
+        assert!(xml.contains("<Value>192.0.2.10</Value>"), "{xml}");
+        assert!(!xml.contains("<Comment>"), "{xml}");
     }
 
     #[test]

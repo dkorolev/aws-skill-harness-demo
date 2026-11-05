@@ -160,7 +160,7 @@ Rationale: each AWS endpoint enforces its own request-rate bucket, and firing ma
 
 ## Write-operation containment
 
-Route 53 zone creation and explicit TXT UPSERT/DELETE operations are the only writes. They are not part of `discover` and are not exercised in live tests. Zone creation has no alias shorter than `r53 --create DOMAIN`; its caller reference contains the normalized domain and current epoch milliseconds to make retries distinguishable. TXT changes require a hosted-zone ID, record name, and value set. AWS remains the idempotency and conflict authority.
+Route 53 zone creation and explicit A, AAAA, CNAME, and TXT UPSERT/DELETE operations are the only writes. They are not part of `discover` and are not exercised in live tests. Zone creation has no alias shorter than `r53 --create DOMAIN`; its caller reference contains the normalized domain and current epoch milliseconds to make retries distinguishable. Record changes require a record name, type, and value set; values are validated per type (IPv4, IPv6, a single hostname, or text that the client quotes and splits) before credentials are loaded. The hosted-zone ID is optional: without it, the client lists zones and picks the longest public zone containing the name, failing rather than guessing when two public zones share a name. Credentials restricted to one zone, such as the TXT-only certificate policy, should keep passing `--zone-id`, because that lookup needs `route53:ListHostedZones`. AWS remains the idempotency and conflict authority.
 
 A stricter enclave deployment should compile writes behind a feature flag or remove them entirely from an audit-only binary.
 
