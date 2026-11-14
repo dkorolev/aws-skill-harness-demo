@@ -16,6 +16,7 @@ AWS-*.md
 .aws/
 .env
 .env.*
+.sqsrc
 *.pem
 *.key
 *.p12
